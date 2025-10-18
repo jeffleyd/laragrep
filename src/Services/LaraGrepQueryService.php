@@ -40,13 +40,33 @@ class LaraGrepQueryService
                     })
                     ->implode(PHP_EOL);
 
+                $relationshipSummary = collect($table['relationships'] ?? [])
+                    ->map(function (array $relationship) {
+                        $type = $relationship['type'] ?? 'unknown';
+                        $relatedTable = $relationship['table'] ?? 'unknown';
+                        $foreignKey = $relationship['foreign_key'] ?? null;
+
+                        return sprintf(
+                            '- %s %s%s',
+                            $type,
+                            $relatedTable,
+                            $foreignKey ? sprintf(' (foreign key: %s)', $foreignKey) : ''
+                        );
+                    })
+                    ->implode(PHP_EOL);
+
                 $tableDescription = trim(($table['description'] ?? '') ?: '');
+
+                $sections = array_filter([
+                    $columnSummary !== '' ? "Columns:\n" . $columnSummary : null,
+                    $relationshipSummary !== '' ? "Relationships:\n" . $relationshipSummary : null,
+                ]);
 
                 return sprintf(
                     "Table %s%s\n%s",
                     $table['name'],
                     $tableDescription ? ' — ' . $tableDescription : '',
-                    $columnSummary
+                    implode(PHP_EOL . PHP_EOL, $sections)
                 );
             })
             ->implode(PHP_EOL . PHP_EOL);
