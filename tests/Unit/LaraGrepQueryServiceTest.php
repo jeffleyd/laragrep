@@ -115,6 +115,7 @@ class LaraGrepQueryServiceTest extends TestCase
 
         $this->assertSame('user', $lastMessage['role']);
         $this->assertStringContainsString('voltada para o negócio', $lastMessage['content']);
+        $this->assertStringContainsString('apenas informando o resultado solicitado, sem explicar o que ele significa', $lastMessage['content']);
         $this->assertStringContainsString('Não mencione SQL, consultas, queries, bindings, código ou termos técnicos.', $lastMessage['content']);
     }
 
