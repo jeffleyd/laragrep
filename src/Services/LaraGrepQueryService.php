@@ -3,11 +3,7 @@
 namespace LaraGrep\Services;
 
 use Illuminate\Database\ConnectionInterface;
-use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -18,16 +14,6 @@ use function collect;
 class LaraGrepQueryService
 {
     protected ?array $cachedMetadata = null;
-
-    /**
-     * @var array<string, class-string<Model>>
-     */
-    protected array $metadataModelMap = [];
-
-    /**
-     * @var array<string, string>
-     */
-    protected array $metadataTableMap = [];
 
     public function __construct(
         protected SchemaMetadataLoader $metadataLoader,
@@ -54,44 +40,48 @@ class LaraGrepQueryService
                     })
                     ->implode(PHP_EOL);
 
-                $model = is_string($table['model'] ?? null) ? trim($table['model']) : '';
-                $modelNote = $model !== '' ? ' (Model: ' . $model . ')' : '';
                 $tableDescription = trim(($table['description'] ?? '') ?: '');
 
                 return sprintf(
-                    "Table %s%s%s\n%s",
+                    "Table %s%s\n%s",
                     $table['name'],
-                    $modelNote,
                     $tableDescription ? ' — ' . $tableDescription : '',
                     $columnSummary
                 );
             })
             ->implode(PHP_EOL . PHP_EOL);
 
-        $instructions = $this->config['system_prompt'] ?? 'You are a helpful assistant that translates questions into database queries.';
-
         return implode(PHP_EOL . PHP_EOL, array_filter([
-            $instructions,
-            'Respond strictly in JSON with the format: {"steps": [{"type": "eloquent"|"raw", ...}], "summary": "..."}.',
-            'Prefer Eloquent builder operations. Only fallback to raw queries when necessary. For raw queries, only SELECT statements with parameter bindings are allowed.',
-            'Available schema information:',
+            'Utilize o esquema disponível para produzir uma consulta SQL SELECT segura que responda à pergunta do usuário.',
+            'Responda estritamente em JSON com o formato {"query": "...", "bindings": []}. Nunca utilize comandos diferentes de SELECT e sempre use bindings posicionais para os parâmetros.',
+            'Esquema disponível:',
             $metadataSummary,
-            'Question: ' . $question,
+            'Pergunta: ' . $question,
         ]));
     }
 
     public function answerQuestion(string $question, bool $debug = false): array
     {
-        $prompt = $this->buildPrompt($question);
-        $response = $this->callModel($prompt);
-        $parsed = $this->interpretResponse($response);
-        $steps = $parsed['steps'];
+        $queryMessages = $this->buildQueryMessages($question);
+        $queryResponse = $this->callModel($queryMessages);
+        $plan = $this->interpretQueryPlanResponse($queryResponse);
 
-        $execution = $this->executeSteps($steps, $debug);
+        $execution = $this->runSelectQuery($plan['query'], $plan['bindings'], $debug);
+
+        $interpretationMessages = $this->buildInterpretationMessages(
+            $question,
+            $plan['query'],
+            $plan['bindings'],
+            $execution['results']
+        );
+
+        $finalResponse = $this->callModel($interpretationMessages);
+        $summary = $this->interpretFinalResponse($finalResponse);
 
         $answer = [
-            'summary' => $parsed['summary'],
-            'steps' => $steps,
+            'summary' => $summary,
+            'query' => $plan['query'],
+            'bindings' => $plan['bindings'],
             'results' => $execution['results'],
         ];
 
@@ -104,6 +94,50 @@ class LaraGrepQueryService
         return $answer;
     }
 
+    protected function buildQueryMessages(string $question): array
+    {
+        $messages = [];
+        $systemPrompt = trim((string) ($this->config['system_prompt'] ?? ''));
+
+        if ($systemPrompt !== '') {
+            $messages[] = ['role' => 'system', 'content' => $systemPrompt];
+        }
+
+        $messages[] = ['role' => 'user', 'content' => $this->buildPrompt($question)];
+
+        return $messages;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $results
+     */
+    protected function buildInterpretationMessages(
+        string $question,
+        string $query,
+        array $bindings,
+        array $results
+    ): array {
+        $messages = [];
+        $systemPrompt = trim((string) ($this->config['interpretation_prompt'] ?? ''));
+
+        if ($systemPrompt !== '') {
+            $messages[] = ['role' => 'system', 'content' => $systemPrompt];
+        }
+
+        $messages[] = [
+            'role' => 'user',
+            'content' => implode(PHP_EOL . PHP_EOL, [
+                'Pergunta original: ' . $question,
+                'Consulta executada: ' . $query,
+                'Bindings: ' . json_encode(array_values($bindings), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'Resultados (JSON): ' . json_encode($results, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'Produza uma resposta em português explicando o que os resultados significam. Caso a lista esteja vazia, informe que nenhum registro foi encontrado.',
+            ]),
+        ];
+
+        return $messages;
+    }
+
     protected function getMetadata(): array
     {
         if ($this->cachedMetadata !== null) {
@@ -114,13 +148,11 @@ class LaraGrepQueryService
         $loaded = $this->metadataLoader->load();
 
         $metadata = array_values(array_merge($loaded, $configured));
-        $this->metadataModelMap = $this->buildModelMap($metadata);
-        $this->metadataTableMap = $this->buildTableMap($metadata);
 
         return $this->cachedMetadata = $metadata;
     }
 
-    protected function callModel(string $prompt): array
+    protected function callModel(array $messages): array
     {
         $apiKey = $this->config['api_key'] ?? null;
 
@@ -128,12 +160,14 @@ class LaraGrepQueryService
             throw new RuntimeException('Missing OpenAI API key.');
         }
 
+        if ($messages === []) {
+            throw new RuntimeException('No messages provided to the language model.');
+        }
+
         $response = Http::withToken($apiKey)
             ->post($this->config['base_url'] ?? 'https://api.openai.com/v1/chat/completions', [
                 'model' => $this->config['model'] ?? 'gpt-3.5-turbo',
-                'messages' => [
-                    ['role' => 'user', 'content' => $prompt],
-                ],
+                'messages' => $messages,
             ]);
 
         if ($response->failed()) {
@@ -143,7 +177,7 @@ class LaraGrepQueryService
         return $response->json();
     }
 
-    protected function interpretResponse(array $response): array
+    protected function interpretQueryPlanResponse(array $response): array
     {
         $content = Arr::get($response, 'choices.0.message.content');
 
@@ -157,25 +191,48 @@ class LaraGrepQueryService
             throw new RuntimeException('Language model response was not valid JSON.');
         }
 
-        $steps = $decoded['steps'] ?? [];
+        $query = isset($decoded['query']) ? trim((string) $decoded['query']) : '';
 
-        if (!is_array($steps)) {
-            throw new RuntimeException('Language model response is missing steps.');
+        if ($query === '') {
+            throw new RuntimeException('Language model response did not include a SQL query.');
         }
 
-        $summary = $decoded['summary'] ?? null;
+        if (!Str::startsWith(strtolower($query), 'select')) {
+            throw new RuntimeException('Only SELECT queries are allowed.');
+        }
+
+        $bindings = $decoded['bindings'] ?? [];
+
+        if (!is_array($bindings)) {
+            throw new RuntimeException('Language model response provided invalid bindings.');
+        }
 
         return [
-            'steps' => $steps,
-            'summary' => is_string($summary) ? $summary : null,
+            'query' => $query,
+            'bindings' => array_values($bindings),
         ];
     }
 
-    protected function executeSteps(array $steps, bool $debug = false): array
+    protected function interpretFinalResponse(array $response): string
+    {
+        $content = Arr::get($response, 'choices.0.message.content');
+
+        if (!is_string($content) || trim($content) === '') {
+            throw new RuntimeException('Language model did not return a final answer.');
+        }
+
+        return trim($content);
+    }
+
+    /**
+     * @param array<int, mixed> $bindings
+     * @param array<int, array<string, mixed>> $results
+     * @return array{results: array<int, array<string, mixed>>, queries: array<int, array<string, mixed>>}
+     */
+    protected function runSelectQuery(string $query, array $bindings, bool $debug = false): array
     {
         $connection = $this->getConnection();
         $queries = [];
-        $results = [];
 
         if ($debug) {
             $connection->flushQueryLog();
@@ -183,16 +240,8 @@ class LaraGrepQueryService
         }
 
         try {
-            $results = collect($steps)
-                ->map(function (array $step) use ($connection) {
-                    return match ($step['type'] ?? null) {
-                        'eloquent' => $this->runEloquentStep($step),
-                        'raw' => $this->runRawStep($step, $connection),
-                        default => null,
-                    };
-                })
-                ->filter(fn ($result) => $result !== null)
-                ->values()
+            $results = collect($connection->select($query, $bindings))
+                ->map(fn ($row) => (array) $row)
                 ->all();
         } finally {
             if ($debug) {
@@ -217,206 +266,10 @@ class LaraGrepQueryService
         ];
     }
 
-    protected function runEloquentStep(array $step): array|string|int|float|null
-    {
-        $modelClass = $this->resolveModelClass($step['model'] ?? null);
-
-        if ($modelClass) {
-            /** @var Model $model */
-            $query = $modelClass::query();
-        } else {
-            $table = $this->resolveTableName($step);
-
-            if (!$table) {
-                throw new RuntimeException('Invalid model or table specified in step.');
-            }
-
-            $query = DB::table($table);
-        }
-
-        $operations = collect($step['operations'] ?? []);
-        $result = null;
-
-        foreach ($operations as $operation) {
-            $method = $operation['method'] ?? null;
-            $arguments = $operation['arguments'] ?? [];
-
-            if (!$method || !method_exists($query, $method)) {
-                continue;
-            }
-
-            $result = $query->{$method}(...$arguments);
-
-            if (!$result instanceof QueryBuilder && !($result instanceof EloquentBuilder)) {
-                return $this->normalizeResult($result);
-            }
-
-            $query = $result;
-        }
-
-        $columns = $step['columns'] ?? ['*'];
-
-        return $query->get($columns)->toArray();
-    }
-
-    /**
-     * @param array<int, array<string, mixed>> $metadata
-     * @return array<string, class-string<Model>>
-     */
-    protected function buildModelMap(array $metadata): array
-    {
-        $map = [];
-
-        foreach ($metadata as $table) {
-            $name = $table['name'] ?? null;
-            $model = $table['model'] ?? null;
-
-            if (!is_string($name) || !is_string($model)) {
-                continue;
-            }
-
-            $normalizedModel = trim($model);
-
-            if ($normalizedModel === '') {
-                continue;
-            }
-
-            $map[$this->normalizeModelLookupKey($name)] = $normalizedModel;
-        }
-
-        return $map;
-    }
-
-    /**
-     * @param array<int, array<string, mixed>> $metadata
-     * @return array<string, string>
-     */
-    protected function buildTableMap(array $metadata): array
-    {
-        $map = [];
-
-        foreach ($metadata as $table) {
-            $name = $table['name'] ?? null;
-
-            if (!is_string($name)) {
-                continue;
-            }
-
-            $normalized = $this->normalizeModelLookupKey($name);
-
-            if ($normalized === '') {
-                continue;
-            }
-
-            $map[$normalized] = $name;
-        }
-
-        return $map;
-    }
-
-    protected function resolveModelClass($model): ?string
-    {
-        if (!is_string($model)) {
-            return null;
-        }
-
-        $candidate = trim($model);
-
-        if ($candidate === '') {
-            return null;
-        }
-
-        if (class_exists($candidate) && is_subclass_of($candidate, Model::class)) {
-            return $candidate;
-        }
-
-        if (empty($this->metadataModelMap)) {
-            $this->getMetadata();
-        }
-
-        $normalized = $this->normalizeModelLookupKey($candidate);
-        $resolved = $this->metadataModelMap[$normalized] ?? null;
-
-        if (is_string($resolved) && class_exists($resolved) && is_subclass_of($resolved, Model::class)) {
-            return $resolved;
-        }
-
-        return null;
-    }
-
-    protected function resolveTableName(array $step): ?string
-    {
-        $candidate = null;
-
-        $model = $step['model'] ?? null;
-        $table = $step['table'] ?? null;
-
-        if (is_string($table) && trim($table) !== '') {
-            $candidate = $table;
-        } elseif (is_string($model) && trim($model) !== '') {
-            $candidate = $model;
-        }
-
-        if ($candidate === null) {
-            return null;
-        }
-
-        if (empty($this->metadataTableMap)) {
-            $this->getMetadata();
-        }
-
-        $normalized = $this->normalizeModelLookupKey($candidate);
-
-        return $this->metadataTableMap[$normalized] ?? null;
-    }
-
-    protected function normalizeModelLookupKey(string $value): string
-    {
-        return strtolower(trim($value));
-    }
-
-    protected function runRawStep(array $step, ?ConnectionInterface $connection = null): array
-    {
-        $query = trim($step['query'] ?? '');
-
-        if (!$query) {
-            throw new RuntimeException('Raw query is missing.');
-        }
-
-        if (!Str::startsWith(strtolower($query), 'select')) {
-            throw new RuntimeException('Only SELECT raw queries are allowed.');
-        }
-
-        $bindings = $step['bindings'] ?? [];
-
-        if (!is_array($bindings)) {
-            throw new RuntimeException('Bindings must be an array.');
-        }
-
-        $connection ??= $this->getConnection();
-
-        return collect($connection->select($query, $bindings))
-            ->map(fn ($row) => (array) $row)
-            ->all();
-    }
-
     protected function getConnection(): ConnectionInterface
     {
         $connection = $this->config['connection'] ?? null;
 
         return $connection ? DB::connection($connection) : DB::connection();
-    }
-
-    protected function normalizeResult($result): array|string|int|float|null
-    {
-        if ($result instanceof Collection) {
-            return $result->toArray();
-        }
-
-        if ($result instanceof Model) {
-            return $result->toArray();
-        }
-
-        return $result;
     }
 }
