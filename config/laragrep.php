@@ -8,6 +8,7 @@ return [
     'connection' => env('LARAGREP_CONNECTION'),
     'exclude_tables' => array_values(array_filter(array_map('trim', explode(',', (string) env('LARAGREP_EXCLUDE_TABLES', ''))))),
     'metadata' => [],
+    'debug' => (bool) env('LARAGREP_DEBUG', false),
     'route' => [
         'prefix' => 'laragrep',
         'middleware' => [],
