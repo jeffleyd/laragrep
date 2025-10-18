@@ -2,10 +2,10 @@
 
 namespace LaraGrep\Tests\Unit;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use LaraGrep\Metadata\SchemaMetadataLoader;
 use LaraGrep\Services\LaraGrepQueryService;
-use LaraGrep\Tests\Support\Models\User;
 use LaraGrep\Tests\TestCase;
 
 class LaraGrepQueryServiceTest extends TestCase
@@ -23,7 +23,7 @@ class LaraGrepQueryServiceTest extends TestCase
     {
         parent::setUp();
 
-        User::query()->insert([
+        DB::table('users')->insert([
             ['name' => 'Alice', 'status' => 'active'],
             ['name' => 'Bob', 'status' => 'inactive'],
         ]);
@@ -37,163 +37,59 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertStringContainsString('Table users', $prompt);
         $this->assertStringContainsString('status', $prompt);
         $this->assertStringContainsString('Listar usuários ativos', $prompt);
+        $this->assertStringContainsString('Responda estritamente em JSON', $prompt);
     }
 
-    public function test_build_prompt_includes_model_when_configured()
+    public function test_it_executes_raw_query_and_interprets_results()
     {
-        $service = $this->makeService([
-            'metadata' => [
-                [
-                    'name' => 'users',
-                    'model' => User::class,
-                    'description' => 'Registered users',
-                    'columns' => [
-                        ['name' => 'id', 'type' => 'int', 'description' => 'Primary key'],
-                    ],
-                ],
-            ],
-        ], []);
-
-        $prompt = $service->buildPrompt('Listar usuários ativos');
-
-        $this->assertStringContainsString('Model: ' . User::class, $prompt);
-    }
-
-    public function test_it_executes_eloquent_steps_from_model_response()
-    {
-        Http::fake([
-            '*' => Http::response([
+        Http::fakeSequence()
+            ->push([
                 'choices' => [[
                     'message' => [
                         'content' => json_encode([
-                            'steps' => [[
-                                'type' => 'eloquent',
-                                'model' => User::class,
-                                'operations' => [
-                                    ['method' => 'where', 'arguments' => ['status', '=', 'active']],
-                                ],
-                                'columns' => ['name'],
-                            ]],
+                            'query' => 'select name from users where status = ?',
+                            'bindings' => ['active'],
                         ]),
                     ],
                 ]],
-            ]),
-        ]);
+            ])
+            ->push([
+                'choices' => [[
+                    'message' => [
+                        'content' => 'Encontramos 1 usuário ativo: Alice.',
+                    ],
+                ]],
+            ]);
 
         $service = $this->makeService();
         $response = $service->answerQuestion('Listar usuários ativos');
 
-        $this->assertSame('Alice', $response['results'][0][0]['name']);
-    }
-
-    public function test_it_resolves_model_from_metadata_name()
-    {
-        Http::fake([
-            '*' => Http::response([
-                'choices' => [[
-                    'message' => [
-                        'content' => json_encode([
-                            'steps' => [[
-                                'type' => 'eloquent',
-                                'model' => 'users',
-                                'operations' => [
-                                    ['method' => 'where', 'arguments' => ['status', '=', 'active']],
-                                ],
-                                'columns' => ['name'],
-                            ]],
-                        ]),
-                    ],
-                ]],
-            ]),
-        ]);
-
-        $service = $this->makeService([
-            'metadata' => [
-                [
-                    'name' => 'users',
-                    'model' => User::class,
-                    'description' => 'Registered users',
-                    'columns' => [
-                        ['name' => 'id', 'type' => 'int', 'description' => 'Primary key'],
-                        ['name' => 'status', 'type' => 'varchar', 'description' => 'User status'],
-                    ],
-                ],
-            ],
-        ], []);
-
-        $response = $service->answerQuestion('Listar usuários ativos');
-
-        $this->assertSame('Alice', $response['results'][0][0]['name']);
-    }
-
-    public function test_it_falls_back_to_query_builder_when_model_is_not_configured()
-    {
-        Http::fake([
-            '*' => Http::response([
-                'choices' => [[
-                    'message' => [
-                        'content' => json_encode([
-                            'steps' => [[
-                                'type' => 'eloquent',
-                                'model' => 'users',
-                                'operations' => [
-                                    ['method' => 'where', 'arguments' => ['status', '=', 'active']],
-                                ],
-                                'columns' => ['name'],
-                            ]],
-                        ]),
-                    ],
-                ]],
-            ]),
-        ]);
-
-        $service = $this->makeService();
-        $response = $service->answerQuestion('Listar usuários ativos');
-
-        $this->assertSame('Alice', $response['results'][0][0]['name']);
-    }
-
-    public function test_it_supports_safe_raw_queries()
-    {
-        Http::fake([
-            '*' => Http::response([
-                'choices' => [[
-                    'message' => [
-                        'content' => json_encode([
-                            'steps' => [[
-                                'type' => 'raw',
-                                'query' => 'select name from users where status = ?',
-                                'bindings' => ['active'],
-                            ]],
-                        ]),
-                    ],
-                ]],
-            ]),
-        ]);
-
-        $service = $this->makeService();
-        $response = $service->answerQuestion('Listar usuários ativos');
-
-        $this->assertSame('Alice', $response['results'][0][0]['name']);
+        $this->assertSame('select name from users where status = ?', $response['query']);
+        $this->assertSame(['active'], $response['bindings']);
+        $this->assertSame('Alice', $response['results'][0]['name']);
+        $this->assertSame('Encontramos 1 usuário ativo: Alice.', $response['summary']);
     }
 
     public function test_it_includes_executed_queries_when_debug_is_enabled()
     {
-        Http::fake([
-            '*' => Http::response([
+        Http::fakeSequence()
+            ->push([
                 'choices' => [[
                     'message' => [
                         'content' => json_encode([
-                            'steps' => [[
-                                'type' => 'raw',
-                                'query' => 'select name from users where status = ?',
-                                'bindings' => ['active'],
-                            ]],
+                            'query' => 'select name from users where status = ?',
+                            'bindings' => ['active'],
                         ]),
                     ],
                 ]],
-            ]),
-        ]);
+            ])
+            ->push([
+                'choices' => [[
+                    'message' => [
+                        'content' => 'Encontramos 1 usuário ativo: Alice.',
+                    ],
+                ]],
+            ]);
 
         $service = $this->makeService();
         $response = $service->answerQuestion('Listar usuários ativos', true);
