@@ -4,6 +4,8 @@ Pacote Laravel para transformar perguntas em linguagem natural em consultas Eloq
 
 ## Instalação
 
+Compatível com projetos Laravel 9.x e 10.x.
+
 ```bash
 composer require laragrep/laragrep
 ```
@@ -21,6 +23,7 @@ LARAGREP_API_KEY=sk-...
 LARAGREP_BASE_URL=https://api.openai.com/v1/chat/completions
 LARAGREP_MODEL=gpt-3.5-turbo
 LARAGREP_EXCLUDE_TABLES=migrations,password_resets
+LARAGREP_DEBUG=false
 ```
 
 ## Uso
@@ -36,6 +39,8 @@ LARAGREP_EXCLUDE_TABLES=migrations,password_resets
 ```
 
 A resposta incluirá os passos (Eloquent ou SQL) gerados e os resultados materializados.
+
+Para depuração, defina `debug` como `true` no payload ou habilite `LARAGREP_DEBUG` para receber, junto da resposta, o log das consultas executadas.
 
 Para proteger a rota utilize middleware no array `laragrep.route.middleware` no arquivo de configuração.
 

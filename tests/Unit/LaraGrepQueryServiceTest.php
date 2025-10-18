@@ -90,6 +90,33 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertSame('Alice', $response['results'][0][0]['name']);
     }
 
+    public function test_it_includes_executed_queries_when_debug_is_enabled()
+    {
+        Http::fake([
+            '*' => Http::response([
+                'choices' => [[
+                    'message' => [
+                        'content' => json_encode([
+                            'steps' => [[
+                                'type' => 'raw',
+                                'query' => 'select name from users where status = ?',
+                                'bindings' => ['active'],
+                            ]],
+                        ]),
+                    ],
+                ]],
+            ]),
+        ]);
+
+        $service = $this->makeService();
+        $response = $service->answerQuestion('Listar usuários ativos', true);
+
+        $this->assertArrayHasKey('debug', $response);
+        $this->assertNotEmpty($response['debug']['queries']);
+        $this->assertSame('select name from users where status = ?', $response['debug']['queries'][0]['query']);
+        $this->assertSame(['active'], $response['debug']['queries'][0]['bindings']);
+    }
+
     protected function makeService(): LaraGrepQueryService
     {
         $loader = $this->createMock(SchemaMetadataLoader::class);

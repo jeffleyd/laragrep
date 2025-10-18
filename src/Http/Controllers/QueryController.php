@@ -17,9 +17,14 @@ class QueryController extends Controller
     {
         $validated = $request->validate([
             'question' => ['required', 'string'],
+            'debug' => ['sometimes', 'boolean'],
         ]);
 
-        $answer = $this->service->answerQuestion($validated['question']);
+        $debug = array_key_exists('debug', $validated)
+            ? (bool) $validated['debug']
+            : (bool) config('laragrep.debug', false);
+
+        $answer = $this->service->answerQuestion($validated['question'], $debug);
 
         return response()->json($answer);
     }

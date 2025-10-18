@@ -2,6 +2,7 @@
 
 namespace LaraGrep\Services;
 
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
@@ -66,18 +67,28 @@ class LaraGrepQueryService
         ]));
     }
 
-    public function answerQuestion(string $question): array
+    public function answerQuestion(string $question, bool $debug = false): array
     {
         $prompt = $this->buildPrompt($question);
         $response = $this->callModel($prompt);
         $parsed = $this->interpretResponse($response);
         $steps = $parsed['steps'];
 
-        return [
+        $execution = $this->executeSteps($steps, $debug);
+
+        $answer = [
             'summary' => $parsed['summary'],
             'steps' => $steps,
-            'results' => $this->executeSteps($steps),
+            'results' => $execution['results'],
         ];
+
+        if ($debug) {
+            $answer['debug'] = [
+                'queries' => $execution['queries'],
+            ];
+        }
+
+        return $answer;
     }
 
     protected function getMetadata(): array
@@ -143,19 +154,50 @@ class LaraGrepQueryService
         ];
     }
 
-    protected function executeSteps(array $steps): array
+    protected function executeSteps(array $steps, bool $debug = false): array
     {
-        return collect($steps)
-            ->map(function (array $step) {
-                return match ($step['type'] ?? null) {
-                    'eloquent' => $this->runEloquentStep($step),
-                    'raw' => $this->runRawStep($step),
-                    default => null,
-                };
-            })
-            ->filter(fn ($result) => $result !== null)
-            ->values()
-            ->all();
+        $connection = $this->getConnection();
+        $queries = [];
+        $results = [];
+
+        if ($debug) {
+            $connection->flushQueryLog();
+            $connection->enableQueryLog();
+        }
+
+        try {
+            $results = collect($steps)
+                ->map(function (array $step) use ($connection) {
+                    return match ($step['type'] ?? null) {
+                        'eloquent' => $this->runEloquentStep($step),
+                        'raw' => $this->runRawStep($step, $connection),
+                        default => null,
+                    };
+                })
+                ->filter(fn ($result) => $result !== null)
+                ->values()
+                ->all();
+        } finally {
+            if ($debug) {
+                $queries = collect($connection->getQueryLog())
+                    ->map(function (array $entry) {
+                        return [
+                            'query' => $entry['query'] ?? '',
+                            'bindings' => $entry['bindings'] ?? [],
+                            'time' => $entry['time'] ?? null,
+                        ];
+                    })
+                    ->all();
+
+                $connection->disableQueryLog();
+                $connection->flushQueryLog();
+            }
+        }
+
+        return [
+            'results' => $results,
+            'queries' => $queries,
+        ];
     }
 
     protected function runEloquentStep(array $step): array|string|int|float|null
@@ -194,7 +236,7 @@ class LaraGrepQueryService
         return $query->get($columns)->toArray();
     }
 
-    protected function runRawStep(array $step): array
+    protected function runRawStep(array $step, ?ConnectionInterface $connection = null): array
     {
         $query = trim($step['query'] ?? '');
 
@@ -212,9 +254,18 @@ class LaraGrepQueryService
             throw new RuntimeException('Bindings must be an array.');
         }
 
-        return collect(DB::select($query, $bindings))
+        $connection ??= $this->getConnection();
+
+        return collect($connection->select($query, $bindings))
             ->map(fn ($row) => (array) $row)
             ->all();
+    }
+
+    protected function getConnection(): ConnectionInterface
+    {
+        $connection = $this->config['connection'] ?? null;
+
+        return $connection ? DB::connection($connection) : DB::connection();
     }
 
     protected function normalizeResult($result): array|string|int|float|null

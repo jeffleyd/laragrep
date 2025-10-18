@@ -25,5 +25,6 @@ abstract class TestCase extends OrchestraTestCase
         $app['config']->set('laragrep.base_url', 'https://api.openai.com/v1/chat/completions');
         $app['config']->set('laragrep.model', 'gpt-3.5-turbo');
         $app['config']->set('laragrep.route.middleware', []);
+        $app['config']->set('laragrep.debug', false);
     }
 }
