@@ -70,7 +70,7 @@ class SchemaMetadataLoader
                     'columns' => [],
                 ],
             ];
-        });
+        })->all();
 
         $columns->each(function ($column) use (&$tableData) {
             $tableName = $column->TABLE_NAME ?? $column->table_name ?? null;
@@ -87,13 +87,13 @@ class SchemaMetadataLoader
             ];
         });
 
-        return array_values($tableData->map(function ($table) {
+        return collect($tableData)->map(function ($table) {
             $table['columns'] = collect($table['columns'])
                 ->sortBy('name')
                 ->values()
                 ->all();
 
             return $table;
-        })->all());
+        })->values()->all();
     }
 }
