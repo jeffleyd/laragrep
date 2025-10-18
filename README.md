@@ -22,6 +22,8 @@ Defina sua chave de API da OpenAI (ou sobrescreva via variáveis específicas da
 LARAGREP_API_KEY=sk-...
 LARAGREP_BASE_URL=https://api.openai.com/v1/chat/completions
 LARAGREP_MODEL=gpt-3.5-turbo
+LARAGREP_DATABASE_TYPE=MariaDB 10.6
+LARAGREP_DATABASE_NAME=retos_live
 LARAGREP_EXCLUDE_TABLES=migrations,password_resets
 LARAGREP_CONNECTION=mysql
 LARAGREP_DEBUG=false
@@ -29,7 +31,7 @@ LARAGREP_DEBUG=false
 
 ## Metadados do esquema
 
-O LaraGrep lê automaticamente o catálogo do banco configurado para montar o contexto de tabelas e colunas. A conexão utilizada é a mesma definida pelo Laravel ou a informada em `laragrep.connection` (via `LARAGREP_CONNECTION`). O carregamento consulta as visões `information_schema.TABLES` e `information_schema.COLUMNS`, respeitando a lista de exclusões configurada em `laragrep.exclude_tables` (`LARAGREP_EXCLUDE_TABLES`). Comentários/descrições das tabelas e colunas no banco são utilizados como documentação para o modelo.
+O LaraGrep lê automaticamente o catálogo do banco configurado para montar o contexto de tabelas e colunas. A conexão utilizada é a mesma definida pelo Laravel ou a informada em `laragrep.connection` (via `LARAGREP_CONNECTION`). O carregamento consulta as visões `information_schema.TABLES` e `information_schema.COLUMNS`, respeitando a lista de exclusões configurada em `laragrep.exclude_tables` (`LARAGREP_EXCLUDE_TABLES`). Comentários/descrições das tabelas e colunas no banco são utilizados como documentação para o modelo. Informe o tipo e o nome do banco utilizado via `laragrep.database` (`LARAGREP_DATABASE_TYPE` e `LARAGREP_DATABASE_NAME`) para que o prompt enviado à IA carregue esse contexto automaticamente.
 
 Além do carregamento automático, é possível complementar ou substituir informações pelo array `metadata` no arquivo `config/laragrep.php`. Cada item segue a estrutura abaixo:
 
@@ -63,6 +65,8 @@ return [
 - `description` é opcional e aceita qualquer texto livre.
 - `model` é opcional; quando informado, o nome completo da classe é incluído no prompt e usado para resolver passos Eloquent que tragam apenas o apelido (ex.: `users`). Caso a classe não seja fornecida, a execução cai automaticamente para o construtor de consultas (`DB::table('users')`) utilizando o próprio `name` como tabela.
 - `columns` é um array opcional; cada coluna pode ter `name`, `type` e `description`.
+
+Além disso, utilize o bloco `database` da configuração para sinalizar explicitamente à IA o tipo do banco (ex.: "MariaDB 10.6") e o nome da base acessada. Esse contexto adicional é enviado ao modelo e reduz a chance de consultas inválidas.
 
 Quando o contexto é enviado ao modelo, cada entrada aparece resumida de forma semelhante a:
 
