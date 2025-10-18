@@ -41,7 +41,6 @@ return [
             'name' => 'orders', // nome da tabela, view ou conjunto lógico
             'description' => 'Pedidos realizados pelos clientes', // opcional
             'model' => App\\Models\\Order::class, // opcional, usado para executar passos Eloquent
-            'aliases' => ['orders_table'], // opcional, nomes alternativos que resolvem para o mesmo model
             'columns' => [
                 [
                     'name' => 'id',
@@ -62,8 +61,7 @@ return [
 
 - `name` é obrigatório e identifica a entidade que será exibida no prompt.
 - `description` é opcional e aceita qualquer texto livre.
-- `model` é opcional; quando informado, o nome completo da classe é incluído no prompt e usado para resolver passos Eloquent que tragam apenas o apelido (ex.: `users`).
-- `aliases` é opcional e aceita um array de strings que também devem apontar para a mesma model.
+- `model` é opcional; quando informado, o nome completo da classe é incluído no prompt e usado para resolver passos Eloquent que tragam apenas o apelido (ex.: `users`). Caso a classe não seja fornecida, a execução cai automaticamente para o construtor de consultas (`DB::table('users')`) utilizando o próprio `name` como tabela.
 - `columns` é um array opcional; cada coluna pode ter `name`, `type` e `description`.
 
 Quando o contexto é enviado ao modelo, cada entrada aparece resumida de forma semelhante a:
@@ -77,8 +75,6 @@ Table users (Model: App\Models\User) — Tabela com todos usuários cadastrados
 ```
 
 Se nenhuma classe for informada, o trecho ` (Model: ...)` é omitido automaticamente.
-
-- `columns` é um array opcional; cada coluna pode ter `name`, `type` e `description`.
 
 As entradas definidas manualmente são mescladas às que vêm do banco. Dessa forma você pode documentar views, tabelas lógicas ou mesmo campos calculados que não existam fisicamente. Também é possível deixar o array vazio para depender apenas do carregamento automático.
 

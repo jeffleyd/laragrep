@@ -24,6 +24,11 @@ class LaraGrepQueryService
      */
     protected array $metadataModelMap = [];
 
+    /**
+     * @var array<string, string>
+     */
+    protected array $metadataTableMap = [];
+
     public function __construct(
         protected SchemaMetadataLoader $metadataLoader,
         protected array $config = []
@@ -110,6 +115,7 @@ class LaraGrepQueryService
 
         $metadata = array_values(array_merge($loaded, $configured));
         $this->metadataModelMap = $this->buildModelMap($metadata);
+        $this->metadataTableMap = $this->buildTableMap($metadata);
 
         return $this->cachedMetadata = $metadata;
     }
@@ -215,12 +221,18 @@ class LaraGrepQueryService
     {
         $modelClass = $this->resolveModelClass($step['model'] ?? null);
 
-        if (!$modelClass) {
-            throw new RuntimeException('Invalid model specified in step.');
-        }
+        if ($modelClass) {
+            /** @var Model $model */
+            $query = $modelClass::query();
+        } else {
+            $table = $this->resolveTableName($step);
 
-        /** @var Model $model */
-        $query = $modelClass::query();
+            if (!$table) {
+                throw new RuntimeException('Invalid model or table specified in step.');
+            }
+
+            $query = DB::table($table);
+        }
 
         $operations = collect($step['operations'] ?? []);
         $result = null;
@@ -270,22 +282,33 @@ class LaraGrepQueryService
             }
 
             $map[$this->normalizeModelLookupKey($name)] = $normalizedModel;
+        }
 
-            $aliases = $table['aliases'] ?? [];
+        return $map;
+    }
 
-            if (is_array($aliases)) {
-                foreach ($aliases as $alias) {
-                    if (is_string($alias)) {
-                        $aliasKey = trim($alias);
+    /**
+     * @param array<int, array<string, mixed>> $metadata
+     * @return array<string, string>
+     */
+    protected function buildTableMap(array $metadata): array
+    {
+        $map = [];
 
-                        if ($aliasKey === '') {
-                            continue;
-                        }
+        foreach ($metadata as $table) {
+            $name = $table['name'] ?? null;
 
-                        $map[$this->normalizeModelLookupKey($aliasKey)] = $normalizedModel;
-                    }
-                }
+            if (!is_string($name)) {
+                continue;
             }
+
+            $normalized = $this->normalizeModelLookupKey($name);
+
+            if ($normalized === '') {
+                continue;
+            }
+
+            $map[$normalized] = $name;
         }
 
         return $map;
@@ -319,6 +342,32 @@ class LaraGrepQueryService
         }
 
         return null;
+    }
+
+    protected function resolveTableName(array $step): ?string
+    {
+        $candidate = null;
+
+        $model = $step['model'] ?? null;
+        $table = $step['table'] ?? null;
+
+        if (is_string($table) && trim($table) !== '') {
+            $candidate = $table;
+        } elseif (is_string($model) && trim($model) !== '') {
+            $candidate = $model;
+        }
+
+        if ($candidate === null) {
+            return null;
+        }
+
+        if (empty($this->metadataTableMap)) {
+            $this->getMetadata();
+        }
+
+        $normalized = $this->normalizeModelLookupKey($candidate);
+
+        return $this->metadataTableMap[$normalized] ?? null;
     }
 
     protected function normalizeModelLookupKey(string $value): string

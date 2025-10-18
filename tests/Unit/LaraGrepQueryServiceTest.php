@@ -126,6 +126,33 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertSame('Alice', $response['results'][0][0]['name']);
     }
 
+    public function test_it_falls_back_to_query_builder_when_model_is_not_configured()
+    {
+        Http::fake([
+            '*' => Http::response([
+                'choices' => [[
+                    'message' => [
+                        'content' => json_encode([
+                            'steps' => [[
+                                'type' => 'eloquent',
+                                'model' => 'users',
+                                'operations' => [
+                                    ['method' => 'where', 'arguments' => ['status', '=', 'active']],
+                                ],
+                                'columns' => ['name'],
+                            ]],
+                        ]),
+                    ],
+                ]],
+            ]),
+        ]);
+
+        $service = $this->makeService();
+        $response = $service->answerQuestion('Listar usuários ativos');
+
+        $this->assertSame('Alice', $response['results'][0][0]['name']);
+    }
+
     public function test_it_supports_safe_raw_queries()
     {
         Http::fake([
