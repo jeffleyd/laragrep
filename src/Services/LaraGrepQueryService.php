@@ -73,8 +73,8 @@ class LaraGrepQueryService
 
         return implode(PHP_EOL . PHP_EOL, array_filter([
             $this->buildDatabaseContextLine(),
-            'Utilize o esquema disponível para produzir uma consulta SQL SELECT segura que responda à pergunta do usuário.',
-            'Responda estritamente em JSON com o formato {"query": "...", "bindings": []}. Utilize apenas consultas SELECT parametrizadas e jamais execute comandos CREATE, INSERT, UPDATE, DELETE, DROP ou ALTER.',
+            'Utilize o esquema disponível para produzir uma ou mais consultas SQL SELECT seguras que respondam à pergunta do usuário. Caso precise de múltiplos passos, descreva-os na ordem em que devem ser executados.',
+            'Responda estritamente em JSON com o formato {"steps": [{"query": "...", "bindings": []}, ...]}. Utilize apenas consultas SELECT parametrizadas e jamais execute comandos CREATE, INSERT, UPDATE, DELETE, DROP ou ALTER.',
             'Esquema disponível:',
             $metadataSummary,
             'Pergunta: ' . $question,
@@ -85,15 +85,28 @@ class LaraGrepQueryService
     {
         $queryMessages = $this->buildQueryMessages($question);
         $queryResponse = $this->callModel($queryMessages);
-        $plan = $this->interpretQueryPlanResponse($queryResponse);
+        $planSteps = $this->interpretQueryPlanResponse($queryResponse);
 
-        $execution = $this->runSelectQuery($plan['query'], $plan['bindings'], $debug);
+        $executedSteps = [];
+        $debugQueries = [];
+
+        foreach ($planSteps as $step) {
+            $execution = $this->runSelectQuery($step['query'], $step['bindings'], $debug);
+
+            $executedSteps[] = [
+                'query' => $step['query'],
+                'bindings' => $step['bindings'],
+                'results' => $execution['results'],
+            ];
+
+            if ($debug) {
+                $debugQueries = array_merge($debugQueries, $execution['queries']);
+            }
+        }
 
         $interpretationMessages = $this->buildInterpretationMessages(
             $question,
-            $plan['query'],
-            $plan['bindings'],
-            $execution['results']
+            $executedSteps
         );
 
         $finalResponse = $this->callModel($interpretationMessages);
@@ -101,14 +114,20 @@ class LaraGrepQueryService
 
         $answer = [
             'summary' => $summary,
-            'query' => $plan['query'],
-            'bindings' => $plan['bindings'],
-            'results' => $execution['results'],
+            'steps' => $executedSteps,
         ];
+
+        if ($executedSteps !== []) {
+            $firstStep = $executedSteps[0];
+
+            $answer['query'] = $firstStep['query'];
+            $answer['bindings'] = $firstStep['bindings'];
+            $answer['results'] = $firstStep['results'];
+        }
 
         if ($debug) {
             $answer['debug'] = [
-                'queries' => $execution['queries'],
+                'queries' => $debugQueries,
             ];
         }
 
@@ -130,13 +149,11 @@ class LaraGrepQueryService
     }
 
     /**
-     * @param array<int, array<string, mixed>> $results
+     * @param array<int, array{query: string, bindings: array<int, mixed>, results: array<int, array<string, mixed>>}> $executedSteps
      */
     protected function buildInterpretationMessages(
         string $question,
-        string $query,
-        array $bindings,
-        array $results
+        array $executedSteps
     ): array {
         $messages = [];
         $systemPrompt = trim((string) ($this->config['interpretation_prompt'] ?? ''));
@@ -145,13 +162,22 @@ class LaraGrepQueryService
             $messages[] = ['role' => 'system', 'content' => $systemPrompt];
         }
 
+        $stepsForModel = array_map(
+            function (array $step) {
+                return [
+                    'query' => $step['query'],
+                    'bindings' => array_values($step['bindings']),
+                    'results' => $step['results'],
+                ];
+            },
+            $executedSteps
+        );
+
         $messages[] = [
             'role' => 'user',
             'content' => implode(PHP_EOL . PHP_EOL, [
                 'Pergunta original: ' . $question,
-                'Consulta executada: ' . $query,
-                'Bindings: ' . json_encode(array_values($bindings), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                'Resultados (JSON): ' . json_encode($results, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'Consultas executadas (JSON): ' . json_encode($stepsForModel, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'Produza uma resposta em português, direta e voltada para o negócio, apenas informando o resultado solicitado, sem explicar o que ele significa a menos que o usuário peça isso explicitamente. Não mencione SQL, consultas, queries, bindings, código ou termos técnicos. Caso a lista esteja vazia, informe que nenhum registro foi encontrado.',
             ]),
         ];
@@ -198,6 +224,9 @@ class LaraGrepQueryService
         return $response->json();
     }
 
+    /**
+     * @return array<int, array{query: string, bindings: array<int, mixed>}>
+     */
     protected function interpretQueryPlanResponse(array $response): array
     {
         $content = Arr::get($response, 'choices.0.message.content');
@@ -212,26 +241,42 @@ class LaraGrepQueryService
             throw new RuntimeException('Language model response was not valid JSON.');
         }
 
-        $query = isset($decoded['query']) ? trim((string) $decoded['query']) : '';
+        $steps = $decoded['steps'] ?? null;
 
-        if ($query === '') {
-            throw new RuntimeException('Language model response did not include a SQL query.');
+        if (!is_array($steps) || $steps === []) {
+            throw new RuntimeException('Language model response did not include query steps.');
         }
 
-        if (!Str::startsWith(strtolower($query), 'select')) {
-            throw new RuntimeException('Only SELECT queries are allowed.');
+        $normalized = [];
+
+        foreach ($steps as $index => $step) {
+            if (!is_array($step)) {
+                throw new RuntimeException('Language model response returned an invalid step.');
+            }
+
+            $query = isset($step['query']) ? trim((string) $step['query']) : '';
+
+            if ($query === '') {
+                throw new RuntimeException(sprintf('Language model response did not include a SQL query for step %d.', $index + 1));
+            }
+
+            if (!Str::startsWith(strtolower($query), 'select')) {
+                throw new RuntimeException('Only SELECT queries are allowed.');
+            }
+
+            $bindings = $step['bindings'] ?? [];
+
+            if (!is_array($bindings)) {
+                throw new RuntimeException('Language model response provided invalid bindings.');
+            }
+
+            $normalized[] = [
+                'query' => $query,
+                'bindings' => array_values($bindings),
+            ];
         }
 
-        $bindings = $decoded['bindings'] ?? [];
-
-        if (!is_array($bindings)) {
-            throw new RuntimeException('Language model response provided invalid bindings.');
-        }
-
-        return [
-            'query' => $query,
-            'bindings' => array_values($bindings),
-        ];
+        return $normalized;
     }
 
     protected function interpretFinalResponse(array $response): string
