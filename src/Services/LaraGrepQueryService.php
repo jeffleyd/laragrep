@@ -19,6 +19,11 @@ class LaraGrepQueryService
 {
     protected ?array $cachedMetadata = null;
 
+    /**
+     * @var array<string, class-string<Model>>
+     */
+    protected array $metadataModelMap = [];
+
     public function __construct(
         protected SchemaMetadataLoader $metadataLoader,
         protected array $config = []
@@ -44,11 +49,14 @@ class LaraGrepQueryService
                     })
                     ->implode(PHP_EOL);
 
+                $model = is_string($table['model'] ?? null) ? trim($table['model']) : '';
+                $modelNote = $model !== '' ? ' (Model: ' . $model . ')' : '';
                 $tableDescription = trim(($table['description'] ?? '') ?: '');
 
                 return sprintf(
-                    "Table %s%s\n%s",
+                    "Table %s%s%s\n%s",
                     $table['name'],
+                    $modelNote,
                     $tableDescription ? ' — ' . $tableDescription : '',
                     $columnSummary
                 );
@@ -100,7 +108,10 @@ class LaraGrepQueryService
         $configured = $this->config['metadata'] ?? [];
         $loaded = $this->metadataLoader->load();
 
-        return $this->cachedMetadata = array_values(array_merge($loaded, $configured));
+        $metadata = array_values(array_merge($loaded, $configured));
+        $this->metadataModelMap = $this->buildModelMap($metadata);
+
+        return $this->cachedMetadata = $metadata;
     }
 
     protected function callModel(string $prompt): array
@@ -202,9 +213,9 @@ class LaraGrepQueryService
 
     protected function runEloquentStep(array $step): array|string|int|float|null
     {
-        $modelClass = $step['model'] ?? null;
+        $modelClass = $this->resolveModelClass($step['model'] ?? null);
 
-        if (!$modelClass || !class_exists($modelClass) || !is_subclass_of($modelClass, Model::class)) {
+        if (!$modelClass) {
             throw new RuntimeException('Invalid model specified in step.');
         }
 
@@ -234,6 +245,85 @@ class LaraGrepQueryService
         $columns = $step['columns'] ?? ['*'];
 
         return $query->get($columns)->toArray();
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $metadata
+     * @return array<string, class-string<Model>>
+     */
+    protected function buildModelMap(array $metadata): array
+    {
+        $map = [];
+
+        foreach ($metadata as $table) {
+            $name = $table['name'] ?? null;
+            $model = $table['model'] ?? null;
+
+            if (!is_string($name) || !is_string($model)) {
+                continue;
+            }
+
+            $normalizedModel = trim($model);
+
+            if ($normalizedModel === '') {
+                continue;
+            }
+
+            $map[$this->normalizeModelLookupKey($name)] = $normalizedModel;
+
+            $aliases = $table['aliases'] ?? [];
+
+            if (is_array($aliases)) {
+                foreach ($aliases as $alias) {
+                    if (is_string($alias)) {
+                        $aliasKey = trim($alias);
+
+                        if ($aliasKey === '') {
+                            continue;
+                        }
+
+                        $map[$this->normalizeModelLookupKey($aliasKey)] = $normalizedModel;
+                    }
+                }
+            }
+        }
+
+        return $map;
+    }
+
+    protected function resolveModelClass($model): ?string
+    {
+        if (!is_string($model)) {
+            return null;
+        }
+
+        $candidate = trim($model);
+
+        if ($candidate === '') {
+            return null;
+        }
+
+        if (class_exists($candidate) && is_subclass_of($candidate, Model::class)) {
+            return $candidate;
+        }
+
+        if (empty($this->metadataModelMap)) {
+            $this->getMetadata();
+        }
+
+        $normalized = $this->normalizeModelLookupKey($candidate);
+        $resolved = $this->metadataModelMap[$normalized] ?? null;
+
+        if (is_string($resolved) && class_exists($resolved) && is_subclass_of($resolved, Model::class)) {
+            return $resolved;
+        }
+
+        return null;
+    }
+
+    protected function normalizeModelLookupKey(string $value): string
+    {
+        return strtolower(trim($value));
     }
 
     protected function runRawStep(array $step, ?ConnectionInterface $connection = null): array

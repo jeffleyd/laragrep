@@ -39,6 +39,26 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertStringContainsString('Listar usuários ativos', $prompt);
     }
 
+    public function test_build_prompt_includes_model_when_configured()
+    {
+        $service = $this->makeService([
+            'metadata' => [
+                [
+                    'name' => 'users',
+                    'model' => User::class,
+                    'description' => 'Registered users',
+                    'columns' => [
+                        ['name' => 'id', 'type' => 'int', 'description' => 'Primary key'],
+                    ],
+                ],
+            ],
+        ], []);
+
+        $prompt = $service->buildPrompt('Listar usuários ativos');
+
+        $this->assertStringContainsString('Model: ' . User::class, $prompt);
+    }
+
     public function test_it_executes_eloquent_steps_from_model_response()
     {
         Http::fake([
@@ -61,6 +81,46 @@ class LaraGrepQueryServiceTest extends TestCase
         ]);
 
         $service = $this->makeService();
+        $response = $service->answerQuestion('Listar usuários ativos');
+
+        $this->assertSame('Alice', $response['results'][0][0]['name']);
+    }
+
+    public function test_it_resolves_model_from_metadata_name()
+    {
+        Http::fake([
+            '*' => Http::response([
+                'choices' => [[
+                    'message' => [
+                        'content' => json_encode([
+                            'steps' => [[
+                                'type' => 'eloquent',
+                                'model' => 'users',
+                                'operations' => [
+                                    ['method' => 'where', 'arguments' => ['status', '=', 'active']],
+                                ],
+                                'columns' => ['name'],
+                            ]],
+                        ]),
+                    ],
+                ]],
+            ]),
+        ]);
+
+        $service = $this->makeService([
+            'metadata' => [
+                [
+                    'name' => 'users',
+                    'model' => User::class,
+                    'description' => 'Registered users',
+                    'columns' => [
+                        ['name' => 'id', 'type' => 'int', 'description' => 'Primary key'],
+                        ['name' => 'status', 'type' => 'varchar', 'description' => 'User status'],
+                    ],
+                ],
+            ],
+        ], []);
+
         $response = $service->answerQuestion('Listar usuários ativos');
 
         $this->assertSame('Alice', $response['results'][0][0]['name']);
@@ -117,10 +177,10 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertSame(['active'], $response['debug']['queries'][0]['bindings']);
     }
 
-    protected function makeService(): LaraGrepQueryService
+    protected function makeService(array $configOverrides = [], ?array $loaderMetadata = null): LaraGrepQueryService
     {
         $loader = $this->createMock(SchemaMetadataLoader::class);
-        $loader->method('load')->willReturn([
+        $loader->method('load')->willReturn($loaderMetadata ?? [
             [
                 'name' => 'users',
                 'description' => 'Registered users',
@@ -132,6 +192,12 @@ class LaraGrepQueryServiceTest extends TestCase
         ]);
 
         $config = $this->app['config']->get('laragrep');
+
+        if (!is_array($config)) {
+            $config = [];
+        }
+
+        $config = array_replace($config, $configOverrides);
 
         return new LaraGrepQueryService($loader, $config);
     }
