@@ -78,6 +78,8 @@ Table users (Model: App\Models\User) — Tabela com todos usuários cadastrados
 
 Se nenhuma classe for informada, o trecho ` (Model: ...)` é omitido automaticamente.
 
+- `columns` é um array opcional; cada coluna pode ter `name`, `type` e `description`.
+
 As entradas definidas manualmente são mescladas às que vêm do banco. Dessa forma você pode documentar views, tabelas lógicas ou mesmo campos calculados que não existam fisicamente. Também é possível deixar o array vazio para depender apenas do carregamento automático.
 
 ## Uso
