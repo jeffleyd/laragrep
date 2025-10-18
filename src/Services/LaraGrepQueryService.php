@@ -131,7 +131,7 @@ class LaraGrepQueryService
                 'Consulta executada: ' . $query,
                 'Bindings: ' . json_encode(array_values($bindings), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'Resultados (JSON): ' . json_encode($results, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                'Produza uma resposta em português explicando o que os resultados significam. Caso a lista esteja vazia, informe que nenhum registro foi encontrado.',
+                'Produza uma resposta em português, direta e voltada para o negócio, explicando o que os resultados significam em termos práticos. Não mencione SQL, consultas, queries, bindings, código ou termos técnicos. Caso a lista esteja vazia, informe que nenhum registro foi encontrado.',
             ]),
         ];
 

@@ -100,6 +100,24 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertSame(['active'], $response['debug']['queries'][0]['bindings']);
     }
 
+    public function test_interpretation_messages_request_business_friendly_summary()
+    {
+        $service = $this->makeService();
+
+        $method = new \ReflectionMethod($service, 'buildInterpretationMessages');
+        $method->setAccessible(true);
+
+        $messages = $method->invoke($service, 'Listar usuários ativos', 'select name from users where status = ?', ['active'], [['name' => 'Alice']]);
+
+        $this->assertNotEmpty($messages);
+
+        $lastMessage = $messages[array_key_last($messages)];
+
+        $this->assertSame('user', $lastMessage['role']);
+        $this->assertStringContainsString('voltada para o negócio', $lastMessage['content']);
+        $this->assertStringContainsString('Não mencione SQL, consultas, queries, bindings, código ou termos técnicos.', $lastMessage['content']);
+    }
+
     protected function makeService(array $configOverrides = [], ?array $loaderMetadata = null): LaraGrepQueryService
     {
         $loader = $this->createMock(SchemaMetadataLoader::class);
