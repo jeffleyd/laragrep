@@ -37,7 +37,8 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertStringContainsString('Table users', $prompt);
         $this->assertStringContainsString('status', $prompt);
         $this->assertStringContainsString('Listar usuários ativos', $prompt);
-        $this->assertStringContainsString('Responda estritamente em JSON', $prompt);
+        $this->assertStringContainsString('Utilize o esquema disponível para produzir uma ou mais consultas SQL SELECT seguras que respondam à pergunta do usuário.', $prompt);
+        $this->assertStringContainsString('Responda estritamente em JSON com o formato {"steps": [{"query": "...", "bindings": []}, ...]}', $prompt);
         $this->assertStringContainsString('Banco de dados:', $prompt);
         $this->assertStringContainsString('jamais execute comandos CREATE, INSERT, UPDATE, DELETE, DROP ou ALTER', $prompt);
     }
@@ -49,8 +50,12 @@ class LaraGrepQueryServiceTest extends TestCase
                 'choices' => [[
                     'message' => [
                         'content' => json_encode([
-                            'query' => 'select name from users where status = ?',
-                            'bindings' => ['active'],
+                            'steps' => [
+                                [
+                                    'query' => 'select name from users where status = ?',
+                                    'bindings' => ['active'],
+                                ],
+                            ],
                         ]),
                     ],
                 ]],
@@ -66,6 +71,10 @@ class LaraGrepQueryServiceTest extends TestCase
         $service = $this->makeService();
         $response = $service->answerQuestion('Listar usuários ativos');
 
+        $this->assertCount(1, $response['steps']);
+        $this->assertSame('select name from users where status = ?', $response['steps'][0]['query']);
+        $this->assertSame(['active'], $response['steps'][0]['bindings']);
+        $this->assertSame('Alice', $response['steps'][0]['results'][0]['name']);
         $this->assertSame('select name from users where status = ?', $response['query']);
         $this->assertSame(['active'], $response['bindings']);
         $this->assertSame('Alice', $response['results'][0]['name']);
@@ -79,8 +88,12 @@ class LaraGrepQueryServiceTest extends TestCase
                 'choices' => [[
                     'message' => [
                         'content' => json_encode([
-                            'query' => 'select name from users where status = ?',
-                            'bindings' => ['active'],
+                            'steps' => [
+                                [
+                                    'query' => 'select name from users where status = ?',
+                                    'bindings' => ['active'],
+                                ],
+                            ],
                         ]),
                     ],
                 ]],
@@ -109,7 +122,11 @@ class LaraGrepQueryServiceTest extends TestCase
         $method = new \ReflectionMethod($service, 'buildInterpretationMessages');
         $method->setAccessible(true);
 
-        $messages = $method->invoke($service, 'Listar usuários ativos', 'select name from users where status = ?', ['active'], [['name' => 'Alice']]);
+        $messages = $method->invoke($service, 'Listar usuários ativos', [[
+            'query' => 'select name from users where status = ?',
+            'bindings' => ['active'],
+            'results' => [['name' => 'Alice']],
+        ]]);
 
         $this->assertNotEmpty($messages);
 
@@ -119,6 +136,7 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertStringContainsString('voltada para o negócio', $lastMessage['content']);
         $this->assertStringContainsString('apenas informando o resultado solicitado, sem explicar o que ele significa', $lastMessage['content']);
         $this->assertStringContainsString('Não mencione SQL, consultas, queries, bindings, código ou termos técnicos.', $lastMessage['content']);
+        $this->assertStringContainsString('Consultas executadas (JSON): ', $lastMessage['content']);
     }
 
     protected function makeService(array $configOverrides = [], ?array $loaderMetadata = null): LaraGrepQueryService
