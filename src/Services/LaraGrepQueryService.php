@@ -72,8 +72,9 @@ class LaraGrepQueryService
             ->implode(PHP_EOL . PHP_EOL);
 
         return implode(PHP_EOL . PHP_EOL, array_filter([
+            $this->buildDatabaseContextLine(),
             'Utilize o esquema disponível para produzir uma consulta SQL SELECT segura que responda à pergunta do usuário.',
-            'Responda estritamente em JSON com o formato {"query": "...", "bindings": []}. Nunca utilize comandos diferentes de SELECT e sempre use bindings posicionais para os parâmetros.',
+            'Responda estritamente em JSON com o formato {"query": "...", "bindings": []}. Utilize apenas consultas SELECT parametrizadas e jamais execute comandos CREATE, INSERT, UPDATE, DELETE, DROP ou ALTER.',
             'Esquema disponível:',
             $metadataSummary,
             'Pergunta: ' . $question,
@@ -291,5 +292,29 @@ class LaraGrepQueryService
         $connection = $this->config['connection'] ?? null;
 
         return $connection ? DB::connection($connection) : DB::connection();
+    }
+
+    protected function buildDatabaseContextLine(): ?string
+    {
+        $database = $this->config['database'] ?? null;
+
+        if (!is_array($database)) {
+            return null;
+        }
+
+        $type = isset($database['type']) ? trim((string) $database['type']) : '';
+        $name = isset($database['name']) ? trim((string) $database['name']) : '';
+
+        if ($type === '' && $name === '') {
+            return null;
+        }
+
+        if ($type !== '' && $name !== '') {
+            return sprintf('Banco de dados: %s — %s', $type, $name);
+        }
+
+        $value = $type !== '' ? $type : $name;
+
+        return sprintf('Banco de dados: %s', $value);
     }
 }

@@ -8,6 +8,10 @@ return [
     'interpretation_prompt' => env('LARAGREP_INTERPRETATION_PROMPT', 'Você é um assistente que transforma resultados de consultas SQL em respostas claras e úteis em português.'),
     'connection' => env('LARAGREP_CONNECTION'),
     'exclude_tables' => array_values(array_filter(array_map('trim', explode(',', (string) env('LARAGREP_EXCLUDE_TABLES', ''))))),
+    'database' => [
+        'type' => env('LARAGREP_DATABASE_TYPE', 'MariaDB 10.6'),
+        'name' => env('LARAGREP_DATABASE_NAME', env('DB_DATABASE', '')),
+    ],
     'metadata' => [
         [
             'name' => 'users',

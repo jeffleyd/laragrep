@@ -38,6 +38,8 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertStringContainsString('status', $prompt);
         $this->assertStringContainsString('Listar usuários ativos', $prompt);
         $this->assertStringContainsString('Responda estritamente em JSON', $prompt);
+        $this->assertStringContainsString('Banco de dados:', $prompt);
+        $this->assertStringContainsString('jamais execute comandos CREATE, INSERT, UPDATE, DELETE, DROP ou ALTER', $prompt);
     }
 
     public function test_it_executes_raw_query_and_interprets_results()
