@@ -84,6 +84,8 @@ class LaraGrepQueryService
             $this->buildDatabaseContextLine(),
             'Use the available schema to produce one or more safe SQL SELECT queries that answer the user\'s question. If multiple steps are required, describe them in the order they should be executed.',
             'Respond strictly in JSON with the format {"steps": [{"query": "...", "bindings": []}, ...]}. Only generate parameterized SELECT statements and never produce CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, or any other mutating commands. If the user requests any write operation or an unsafe action, respond instead with {"steps": [], "summary": "<polite refusal in the user language>"}.',
+            'If the question can be answered without running a database query (for example, it only references prior conversation, is outside the scope of the schema, or requests unsupported data), respond with {"steps": [], "summary": "<clear explanation in the user language>"}.',
+            'Only reference tables that are explicitly listed in the schema summary. If the necessary table is missing, do not guess—return {"steps": [], "summary": "<explain the limitation in the user language>"}.',
             'User language: ' . $this->getUserLanguage(),
             'Available schema:',
             $metadataSummary,
@@ -311,6 +313,8 @@ class LaraGrepQueryService
                 throw new RuntimeException('Only SELECT queries are allowed.');
             }
 
+            $this->assertTablesExistInMetadata($query);
+
             $bindings = $step['bindings'] ?? [];
 
             if (!is_array($bindings)) {
@@ -388,6 +392,63 @@ class LaraGrepQueryService
             'results' => $results,
             'queries' => $queries,
         ];
+    }
+
+    protected function assertTablesExistInMetadata(string $query): void
+    {
+        $knownTables = $this->getKnownTableNames();
+
+        if ($knownTables === []) {
+            return;
+        }
+
+        $tablesInQuery = $this->extractTableNamesFromQuery($query);
+
+        foreach ($tablesInQuery as $table) {
+            if (!in_array($table, $knownTables, true)) {
+                throw new RuntimeException(sprintf('Query references unknown table "%s".', $table));
+            }
+        }
+    }
+
+    protected function getKnownTableNames(): array
+    {
+        return collect($this->getMetadata())
+            ->map(fn (array $table) => strtolower((string) ($table['name'] ?? '')))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function extractTableNamesFromQuery(string $query): array
+    {
+        $pattern = '/\b(?:from|join)\s+([`"\[]?[\w.]+[`"\]]?(?:\s+as)?(?:\s+[\w`"\[]+)*)/i';
+
+        if (!preg_match_all($pattern, $query, $matches)) {
+            return [];
+        }
+
+        $tables = collect($matches[1] ?? [])
+            ->map(function ($match) {
+                $table = trim((string) $match);
+                $table = preg_replace('/\s+as\s+.*/i', '', $table) ?? $table;
+                $table = preg_split('/\s+/', $table)[0] ?? $table;
+                $table = trim($table, "`\"[]");
+
+                if (str_contains($table, '.')) {
+                    $parts = explode('.', $table);
+                    $table = end($parts) ?: $table;
+                }
+
+                return strtolower($table);
+            })
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        return $tables;
     }
 
     protected function getConnection(): ConnectionInterface
