@@ -5,7 +5,8 @@ return [
     'base_url' => env('LARAGREP_BASE_URL', 'https://api.openai.com/v1/chat/completions'),
     'model' => env('LARAGREP_MODEL', 'gpt-3.5-turbo'),
     'system_prompt' => env('LARAGREP_SYSTEM_PROMPT', 'You are a helpful assistant that translates natural language questions into safe Laravel Eloquent queries. Always respond with valid JSON describing the steps to execute.'),
-    'interpretation_prompt' => env('LARAGREP_INTERPRETATION_PROMPT', 'Você é um assistente que transforma resultados de consultas SQL em respostas claras e úteis em português.'),
+    'interpretation_prompt' => env('LARAGREP_INTERPRETATION_PROMPT', "You are an assistant that turns SQL query results into clear, business-oriented answers using the user's language."),
+    'user_language' => env('LARAGREP_USER_LANGUAGE', 'pt-BR'),
     'connection' => env('LARAGREP_CONNECTION'),
     'exclude_tables' => array_values(array_filter(array_map('trim', explode(',', (string) env('LARAGREP_EXCLUDE_TABLES', ''))))),
     'database' => [
