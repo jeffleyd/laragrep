@@ -13,12 +13,20 @@ use function collect;
 
 class LaraGrepQueryService
 {
-    protected ?array $cachedMetadata = null;
+    protected array $baseConfig = [];
+
+    /**
+     * @var array<string, array<int, array<string, mixed>>>
+     */
+    protected array $cachedMetadata = [];
+
+    protected ?string $currentContext = null;
 
     public function __construct(
         protected SchemaMetadataLoader $metadataLoader,
         protected array $config = []
     ) {
+        $this->baseConfig = $this->config;
     }
 
     public function buildPrompt(string $question): string
@@ -82,74 +90,76 @@ class LaraGrepQueryService
         ]));
     }
 
-    public function answerQuestion(string $question, bool $debug = false): array
+    public function answerQuestion(string $question, bool $debug = false, ?string $context = null): array
     {
-        $queryMessages = $this->buildQueryMessages($question);
-        $queryResponse = $this->callModel($queryMessages);
-        $plan = $this->interpretQueryPlanResponse($queryResponse);
+        return $this->withContext($context, function () use ($question, $debug) {
+            $queryMessages = $this->buildQueryMessages($question);
+            $queryResponse = $this->callModel($queryMessages);
+            $plan = $this->interpretQueryPlanResponse($queryResponse);
 
-        if ($plan['steps'] === []) {
-            $summary = $plan['summary'] ?? 'Sorry, I can only help with read-only queries.';
+            if ($plan['steps'] === []) {
+                $summary = $plan['summary'] ?? 'Sorry, I can only help with read-only queries.';
 
-            $answer = ['summary' => $summary];
+                $answer = ['summary' => $summary];
+
+                if ($debug) {
+                    $answer['steps'] = [];
+                    $answer['results'] = [];
+                }
+
+                return $answer;
+            }
+
+            $planSteps = $plan['steps'];
+
+            $executedSteps = [];
+            $debugQueries = [];
+
+            foreach ($planSteps as $step) {
+                $execution = $this->runSelectQuery($step['query'], $step['bindings'], $debug);
+
+                $executedSteps[] = [
+                    'query' => $step['query'],
+                    'bindings' => $step['bindings'],
+                    'results' => $execution['results'],
+                ];
+
+                if ($debug) {
+                    $debugQueries = array_merge($debugQueries, $execution['queries']);
+                }
+            }
+
+            $interpretationMessages = $this->buildInterpretationMessages(
+                $question,
+                $executedSteps
+            );
+
+            $finalResponse = $this->callModel($interpretationMessages);
+            $summary = $this->interpretFinalResponse($finalResponse);
+
+            $answer = [
+                'summary' => $summary,
+            ];
 
             if ($debug) {
-                $answer['steps'] = [];
-                $answer['results'] = [];
+                $answer['steps'] = $executedSteps;
+
+                if ($executedSteps !== []) {
+                    $firstStep = $executedSteps[0];
+
+                    $answer['bindings'] = $firstStep['bindings'];
+                    $answer['results'] = $firstStep['results'];
+                } else {
+                    $answer['results'] = [];
+                }
+
+                $answer['debug'] = [
+                    'queries' => $debugQueries,
+                ];
             }
 
             return $answer;
-        }
-
-        $planSteps = $plan['steps'];
-
-        $executedSteps = [];
-        $debugQueries = [];
-
-        foreach ($planSteps as $step) {
-            $execution = $this->runSelectQuery($step['query'], $step['bindings'], $debug);
-
-            $executedSteps[] = [
-                'query' => $step['query'],
-                'bindings' => $step['bindings'],
-                'results' => $execution['results'],
-            ];
-
-            if ($debug) {
-                $debugQueries = array_merge($debugQueries, $execution['queries']);
-            }
-        }
-
-        $interpretationMessages = $this->buildInterpretationMessages(
-            $question,
-            $executedSteps
-        );
-
-        $finalResponse = $this->callModel($interpretationMessages);
-        $summary = $this->interpretFinalResponse($finalResponse);
-
-        $answer = [
-            'summary' => $summary,
-        ];
-
-        if ($debug) {
-            $answer['steps'] = $executedSteps;
-
-            if ($executedSteps !== []) {
-                $firstStep = $executedSteps[0];
-
-                $answer['bindings'] = $firstStep['bindings'];
-                $answer['results'] = $firstStep['results'];
-            } else {
-                $answer['results'] = [];
-            }
-
-            $answer['debug'] = [
-                'queries' => $debugQueries,
-            ];
-        }
-
-        return $answer;
+        });
     }
 
     protected function buildQueryMessages(string $question): array
@@ -205,16 +215,37 @@ class LaraGrepQueryService
 
     protected function getMetadata(): array
     {
-        if ($this->cachedMetadata !== null) {
-            return $this->cachedMetadata;
+        $cacheKey = $this->currentContext ?? '__default__';
+
+        if (array_key_exists($cacheKey, $this->cachedMetadata)) {
+            return $this->cachedMetadata[$cacheKey];
         }
 
         $configured = $this->config['metadata'] ?? [];
-        $loaded = $this->metadataLoader->load();
+
+        if (!is_array($configured)) {
+            $configured = [];
+        }
+
+        $configured = array_values(array_filter(
+            $configured,
+            fn ($table) => is_array($table)
+        ));
+
+        $excludeTables = $this->config['exclude_tables'] ?? [];
+
+        if (!is_array($excludeTables)) {
+            $excludeTables = [];
+        }
+
+        $loaded = $this->metadataLoader->load(
+            $this->config['connection'] ?? null,
+            $excludeTables
+        );
 
         $metadata = array_values(array_merge($loaded, $configured));
 
-        return $this->cachedMetadata = $metadata;
+        return $this->cachedMetadata[$cacheKey] = $metadata;
     }
 
     protected function callModel(array $messages): array
@@ -402,4 +433,45 @@ class LaraGrepQueryService
         return $language !== '' ? $language : 'en';
     }
 
+    /**
+     * @template TReturn
+     * @param callable():TReturn $callback
+     * @return TReturn
+     */
+    protected function withContext(?string $context, callable $callback)
+    {
+        $previousConfig = $this->config;
+        $previousContext = $this->currentContext;
+
+        if ($context === null) {
+            $this->currentContext = null;
+            $this->config = $this->baseConfig;
+        } else {
+            $this->currentContext = $context;
+            $overrides = [];
+
+            $contexts = $this->baseConfig['contexts'] ?? [];
+
+            if (is_array($contexts)) {
+                $contextOverrides = $contexts[$context] ?? [];
+
+                if (is_array($contextOverrides)) {
+                    $overrides = $contextOverrides;
+                }
+            }
+
+            if (isset($overrides['metadata'])) {
+                unset($overrides['metadata']);
+            }
+
+            $this->config = array_replace_recursive($this->baseConfig, $overrides);
+        }
+
+        try {
+            return $callback();
+        } finally {
+            $this->config = $previousConfig;
+            $this->currentContext = $previousContext;
+        }
+    }
 }

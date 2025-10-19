@@ -13,7 +13,7 @@ class QueryController extends Controller
     {
     }
 
-    public function __invoke(Request $request): JsonResponse
+    public function __invoke(Request $request, ?string $context = null): JsonResponse
     {
         $validated = $request->validate([
             'question' => ['required', 'string'],
@@ -24,7 +24,7 @@ class QueryController extends Controller
             ? (bool) $validated['debug']
             : (bool) config('laragrep.debug', false);
 
-        $answer = $this->service->answerQuestion($validated['question'], $debug);
+        $answer = $this->service->answerQuestion($validated['question'], $debug, $context);
 
         return response()->json($answer);
     }

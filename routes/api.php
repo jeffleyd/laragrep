@@ -7,5 +7,5 @@ Route::group([
     'prefix' => config('laragrep.route.prefix', 'laragrep'),
     'middleware' => config('laragrep.route.middleware', []),
 ], function () {
-    Route::post('/', QueryController::class)->name('laragrep.query');
+    Route::post('/{context?}', QueryController::class)->name('laragrep.query');
 });

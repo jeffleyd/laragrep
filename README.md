@@ -82,11 +82,30 @@ Se nenhuma classe for informada, o trecho ` (Model: ...)` é omitido automaticam
 
 As entradas definidas manualmente são mescladas às que vêm do banco. Dessa forma você pode documentar views, tabelas lógicas ou mesmo campos calculados que não existam fisicamente. Também é possível deixar o array vazio para depender apenas do carregamento automático.
 
+### Contextos nomeados
+
+Quando você trabalha com múltiplos bancos ou conjuntos de tabelas, defina contextos nomeados e selecione-os diretamente na URL. Utilize o bloco `contexts` para sobrescrever conexão, nome do banco ou tabela a ignorar enquanto mantém o array `metadata` global como documentação comum:
+
+```php
+return [
+    'metadata' => [...],
+    'contexts' => [
+        'adf' => [
+            'connection' => 'mysql_adf',
+            'database' => ['type' => 'MariaDB 10.6', 'name' => 'adf_reporting'],
+            'exclude_tables' => ['migrations'],
+        ],
+    ],
+];
+```
+
+Ao enviar um `POST` para `/laragrep/{contexto}`, o pacote aplica as overrides definidas para esse nome (conexão, exclusões e dados do banco). Caso nenhum contexto seja informado, o comportamento padrão permanece inalterado.
+
 ## Uso
 
 1. Certifique-se de que suas tabelas e colunas possuem descrições/comentários no banco. O pacote consulta o `information_schema` utilizando a conexão configurada.
 2. Ajuste `laragrep.exclude_tables` no arquivo de configuração para esconder tabelas sensíveis de clientes.
-3. Envie uma requisição `POST` para a rota publicada (`/laragrep` por padrão) com o payload:
+3. Envie uma requisição `POST` para a rota publicada (`/laragrep` por padrão) com o payload abaixo. Opcionalmente, inclua o contexto desejado na URL (ex.: `/laragrep/adf`) para aplicar as configurações específicas daquele banco.
 
 ```json
 {
@@ -100,10 +119,3 @@ Para depuração, defina `debug` como `true` no payload ou habilite `LARAGREP_DE
 
 Para proteger a rota utilize middleware no array `laragrep.route.middleware` no arquivo de configuração.
 
-## Testes
-
-```bash
-composer test
-```
-
-Os testes cobrem o parser de metadados (incluindo exclusões), a construção do prompt e a execução de consultas mockadas.
