@@ -13,10 +13,44 @@ class LaraGrepServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/laragrep.php', 'laragrep');
 
         $this->app->singleton(SchemaMetadataLoader::class, function ($app) {
+            $config = $app['config']->get('laragrep', []);
+            $defaultContext = [];
+
+            $contexts = $config['contexts'] ?? [];
+
+            if (is_array($contexts)) {
+                if (isset($contexts['default']) && is_array($contexts['default'])) {
+                    $defaultContext = $contexts['default'];
+                } else {
+                    foreach ($contexts as $candidate) {
+                        if (is_array($candidate)) {
+                            $defaultContext = $candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            $connection = $defaultContext['connection'] ?? ($config['connection'] ?? null);
+            $excludeTables = $defaultContext['exclude_tables'] ?? ($config['exclude_tables'] ?? []);
+
+            if (is_string($excludeTables)) {
+                $excludeTables = array_map('trim', explode(',', $excludeTables));
+            }
+
+            if (!is_array($excludeTables)) {
+                $excludeTables = [];
+            }
+
+            $excludeTables = array_values(array_filter(
+                $excludeTables,
+                fn ($value) => $value !== null && $value !== ''
+            ));
+
             return new SchemaMetadataLoader(
                 $app['db'],
-                $app['config']->get('laragrep.connection'),
-                $app['config']->get('laragrep.exclude_tables', [])
+                $connection,
+                $excludeTables
             );
         });
 

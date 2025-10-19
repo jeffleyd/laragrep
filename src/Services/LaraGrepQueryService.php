@@ -26,7 +26,8 @@ class LaraGrepQueryService
         protected SchemaMetadataLoader $metadataLoader,
         protected array $config = []
     ) {
-        $this->baseConfig = $this->config;
+        $this->baseConfig = $this->normalizeConfig($this->config);
+        $this->config = $this->baseConfig;
     }
 
     public function buildPrompt(string $question): string
@@ -460,10 +461,6 @@ class LaraGrepQueryService
                 }
             }
 
-            if (isset($overrides['metadata'])) {
-                unset($overrides['metadata']);
-            }
-
             $this->config = array_replace_recursive($this->baseConfig, $overrides);
         }
 
@@ -473,5 +470,156 @@ class LaraGrepQueryService
             $this->config = $previousConfig;
             $this->currentContext = $previousContext;
         }
+    }
+
+    protected function normalizeConfig(array $config): array
+    {
+        $normalized = $config;
+
+        $normalized['metadata'] = $this->normalizeTables($normalized['metadata'] ?? []);
+        $normalized['exclude_tables'] = $this->normalizeExcludeTables($normalized['exclude_tables'] ?? []);
+        $normalized['database'] = $this->normalizeDatabase($normalized['database'] ?? []);
+
+        $legacyContext = $this->normalizeContextArray($normalized['context'] ?? []);
+        unset($normalized['context']);
+
+        $normalized['contexts'] = $this->normalizeContextsArray($normalized['contexts'] ?? []);
+
+        if ($legacyContext !== []) {
+            $normalized['contexts']['default'] = array_replace_recursive(
+                $normalized['contexts']['default'] ?? [],
+                $legacyContext
+            );
+        }
+
+        $defaultContext = $normalized['contexts']['default'] ?? [];
+
+        if ($defaultContext === [] && (
+            ($normalized['metadata'] ?? []) !== [] ||
+            ($normalized['exclude_tables'] ?? []) !== [] ||
+            ($normalized['database'] ?? []) !== [] ||
+            ($normalized['connection'] ?? null) !== null
+        )) {
+            $defaultContext = $this->normalizeContextArray([
+                'metadata' => $normalized['metadata'],
+                'exclude_tables' => $normalized['exclude_tables'],
+                'database' => $normalized['database'],
+                'connection' => $normalized['connection'] ?? null,
+            ]);
+
+            if ($defaultContext !== []) {
+                $normalized['contexts']['default'] = $defaultContext;
+            }
+        }
+
+        if ($defaultContext !== []) {
+            foreach (['connection', 'exclude_tables', 'database', 'metadata'] as $key) {
+                if (array_key_exists($key, $defaultContext)) {
+                    $normalized[$key] = $defaultContext[$key];
+                }
+            }
+        }
+
+        return $normalized;
+    }
+
+    protected function normalizeContextArray($context): array
+    {
+        if (!is_array($context)) {
+            return [];
+        }
+
+        $normalized = $context;
+
+        if (array_key_exists('tables', $normalized)) {
+            $tables = $this->normalizeTables($normalized['tables']);
+            $normalized['tables'] = $tables;
+            $normalized['metadata'] = $tables;
+        }
+
+        if (array_key_exists('metadata', $normalized)) {
+            $normalized['metadata'] = $this->normalizeTables($normalized['metadata']);
+        }
+
+        if (array_key_exists('exclude_tables', $normalized)) {
+            $normalized['exclude_tables'] = $this->normalizeExcludeTables($normalized['exclude_tables']);
+        }
+
+        if (array_key_exists('database', $normalized)) {
+            $normalized['database'] = $this->normalizeDatabase($normalized['database']);
+        }
+
+        return $normalized;
+    }
+
+    protected function normalizeContextsArray($contexts): array
+    {
+        if (!is_array($contexts)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($contexts as $name => $context) {
+            if (!is_array($context)) {
+                continue;
+            }
+
+            $normalized[$name] = $this->normalizeContextArray($context);
+        }
+
+        return $normalized;
+    }
+
+    protected function normalizeTables($tables): array
+    {
+        if (!is_array($tables)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $tables,
+            fn ($table) => is_array($table)
+        ));
+    }
+
+    protected function normalizeExcludeTables($excludeTables): array
+    {
+        if (is_string($excludeTables)) {
+            $excludeTables = array_map('trim', explode(',', $excludeTables));
+        }
+
+        if (!is_array($excludeTables)) {
+            return [];
+        }
+
+        $values = array_map(
+            fn ($value) => is_string($value) ? trim($value) : $value,
+            $excludeTables
+        );
+
+        return array_values(array_filter(
+            $values,
+            fn ($value) => $value !== null && $value !== ''
+        ));
+    }
+
+    protected function normalizeDatabase($database): array
+    {
+        if (!is_array($database)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        if (array_key_exists('type', $database)) {
+            $normalized['type'] = (string) $database['type'];
+        }
+
+        if (array_key_exists('name', $database)) {
+            $normalized['name'] = (string) $database['name'];
+        }
+
+        return $normalized;
     }
 }
