@@ -73,16 +73,21 @@ class LaraGrepQueryService
 
         return implode(PHP_EOL . PHP_EOL, array_filter([
             $this->buildDatabaseContextLine(),
-            'Utilize o esquema disponível para produzir uma ou mais consultas SQL SELECT seguras que respondam à pergunta do usuário. Caso precise de múltiplos passos, descreva-os na ordem em que devem ser executados.',
-            'Responda estritamente em JSON com o formato {"steps": [{"query": "...", "bindings": []}, ...]}. Utilize apenas consultas SELECT parametrizadas e jamais execute comandos CREATE, INSERT, UPDATE, DELETE, DROP ou ALTER.',
-            'Esquema disponível:',
+            'Use the available schema to produce one or more safe SQL SELECT queries that answer the user\'s question. If multiple steps are required, describe them in the order they should be executed.',
+            'Respond strictly in JSON with the format {"steps": [{"query": "...", "bindings": []}, ...]}. Only generate parameterized SELECT statements and never produce CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, or any other mutating commands.',
+            'User language: ' . $this->getUserLanguage(),
+            'Available schema:',
             $metadataSummary,
-            'Pergunta: ' . $question,
+            'Question: ' . $question,
         ]));
     }
 
     public function answerQuestion(string $question, bool $debug = false): array
     {
+        if ($this->questionRequestsWriteOperations($question)) {
+            return $this->buildModificationNotAllowedResponse();
+        }
+
         $queryMessages = $this->buildQueryMessages($question);
         $queryResponse = $this->callModel($queryMessages);
         $planSteps = $this->interpretQueryPlanResponse($queryResponse);
@@ -176,9 +181,9 @@ class LaraGrepQueryService
         $messages[] = [
             'role' => 'user',
             'content' => implode(PHP_EOL . PHP_EOL, [
-                'Pergunta original: ' . $question,
-                'Consultas executadas (JSON): ' . json_encode($stepsForModel, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                'Produza uma resposta em português, direta e voltada para o negócio, apenas informando o resultado solicitado, sem explicar o que ele significa a menos que o usuário peça isso explicitamente. Não mencione SQL, consultas, queries, bindings, código ou termos técnicos. Caso a lista esteja vazia, informe que nenhum registro foi encontrado.',
+                'Original question: ' . $question,
+                'Executed queries (JSON): ' . json_encode($stepsForModel, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                sprintf('Provide a concise, business-oriented summary in %s that only reports the requested result. Do not mention SQL, queries, bindings, code, or technical terms. Explain what the numbers mean only if the user explicitly asked for that. If the list is empty, politely state that no records were found.', $this->getUserLanguage()),
             ]),
         ];
 
@@ -355,11 +360,59 @@ class LaraGrepQueryService
         }
 
         if ($type !== '' && $name !== '') {
-            return sprintf('Banco de dados: %s — %s', $type, $name);
+            return sprintf('Database: %s — %s', $type, $name);
         }
 
         $value = $type !== '' ? $type : $name;
 
-        return sprintf('Banco de dados: %s', $value);
+        return sprintf('Database: %s', $value);
+    }
+
+    protected function getUserLanguage(): string
+    {
+        $language = $this->config['user_language'] ?? null;
+
+        if (!is_string($language)) {
+            return 'en';
+        }
+
+        $language = trim($language);
+
+        return $language !== '' ? $language : 'en';
+    }
+
+    protected function questionRequestsWriteOperations(string $question): bool
+    {
+        $normalized = Str::lower($question);
+
+        $patterns = [
+            '/\b(create|insert|update|delete|drop|alter|truncate|merge|replace|upsert)\b/iu',
+            '/\b(add|remove|destroy|edit|modify)\b/iu',
+            '/\b(cadastrar|cadastre|cadastro|criar|crie|criem|criou|inserir|insira|insere|inseri|insercao|inserção|adicionar|adicione|adiciona|atualizar|atualize|atualizacao|atualização|remover|remova|excluir|exclua|apagar|apague|deletar|delete|deletem)\b/iu',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $normalized) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function buildModificationNotAllowedResponse(): array
+    {
+        $language = Str::lower($this->getUserLanguage());
+
+        if (Str::startsWith($language, 'pt')) {
+            $summary = 'Desculpe, não posso criar, atualizar ou deletar dados; só posso ajudar com consultas de leitura.';
+        } else {
+            $summary = 'Sorry, I can only help with read-only queries and cannot create, update, or delete data.';
+        }
+
+        return [
+            'summary' => $summary,
+            'steps' => [],
+        ];
     }
 }

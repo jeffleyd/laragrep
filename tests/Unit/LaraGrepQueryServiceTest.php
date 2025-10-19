@@ -37,10 +37,11 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertStringContainsString('Table users', $prompt);
         $this->assertStringContainsString('status', $prompt);
         $this->assertStringContainsString('Listar usuários ativos', $prompt);
-        $this->assertStringContainsString('Utilize o esquema disponível para produzir uma ou mais consultas SQL SELECT seguras que respondam à pergunta do usuário.', $prompt);
-        $this->assertStringContainsString('Responda estritamente em JSON com o formato {"steps": [{"query": "...", "bindings": []}, ...]}', $prompt);
-        $this->assertStringContainsString('Banco de dados:', $prompt);
-        $this->assertStringContainsString('jamais execute comandos CREATE, INSERT, UPDATE, DELETE, DROP ou ALTER', $prompt);
+        $this->assertStringContainsString("Use the available schema to produce one or more safe SQL SELECT queries that answer the user's question.", $prompt);
+        $this->assertStringContainsString('Respond strictly in JSON with the format {"steps": [{"query": "...", "bindings": []}, ...]}', $prompt);
+        $this->assertStringContainsString('Database:', $prompt);
+        $this->assertStringContainsString('never produce CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, or any other mutating commands', $prompt);
+        $this->assertStringContainsString('User language: pt-BR', $prompt);
     }
 
     public function test_it_executes_raw_query_and_interprets_results()
@@ -115,6 +116,19 @@ class LaraGrepQueryServiceTest extends TestCase
         $this->assertSame(['active'], $response['debug']['queries'][0]['bindings']);
     }
 
+    public function test_it_refuses_modification_requests()
+    {
+        Http::fake();
+
+        $service = $this->makeService();
+        $response = $service->answerQuestion('Por favor, atualize o status do usuário para ativo');
+
+        $this->assertSame('Desculpe, não posso criar, atualizar ou deletar dados; só posso ajudar com consultas de leitura.', $response['summary']);
+        $this->assertSame([], $response['steps']);
+
+        Http::assertNothingSent();
+    }
+
     public function test_interpretation_messages_request_business_friendly_summary()
     {
         $service = $this->makeService();
@@ -133,10 +147,11 @@ class LaraGrepQueryServiceTest extends TestCase
         $lastMessage = $messages[array_key_last($messages)];
 
         $this->assertSame('user', $lastMessage['role']);
-        $this->assertStringContainsString('voltada para o negócio', $lastMessage['content']);
-        $this->assertStringContainsString('apenas informando o resultado solicitado, sem explicar o que ele significa', $lastMessage['content']);
-        $this->assertStringContainsString('Não mencione SQL, consultas, queries, bindings, código ou termos técnicos.', $lastMessage['content']);
-        $this->assertStringContainsString('Consultas executadas (JSON): ', $lastMessage['content']);
+        $this->assertStringContainsString('business-oriented summary', $lastMessage['content']);
+        $this->assertStringContainsString('only reports the requested result', $lastMessage['content']);
+        $this->assertStringContainsString('Do not mention SQL, queries, bindings, code, or technical terms.', $lastMessage['content']);
+        $this->assertStringContainsString('Executed queries (JSON): ', $lastMessage['content']);
+        $this->assertStringContainsString('in pt-BR', $lastMessage['content']);
     }
 
     protected function makeService(array $configOverrides = [], ?array $loaderMetadata = null): LaraGrepQueryService
