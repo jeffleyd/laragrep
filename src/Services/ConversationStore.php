@@ -105,6 +105,7 @@ class ConversationStore
         $excess = $this->connection->table($this->table)
             ->where('context', $contextId)
             ->orderByDesc('id')
+            ->limit(PHP_INT_MAX)
             ->offset($this->maxMessages)
             ->pluck('id');
 
