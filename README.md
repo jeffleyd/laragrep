@@ -31,32 +31,37 @@ LARAGREP_DEBUG=false
 
 ## Metadados do esquema
 
-O LaraGrep lê automaticamente o catálogo do banco configurado para montar o contexto de tabelas e colunas. A conexão utilizada é a mesma definida pelo Laravel ou a informada em `laragrep.connection` (via `LARAGREP_CONNECTION`). O carregamento consulta as visões `information_schema.TABLES` e `information_schema.COLUMNS`, respeitando a lista de exclusões configurada em `laragrep.exclude_tables` (`LARAGREP_EXCLUDE_TABLES`). Comentários/descrições das tabelas e colunas no banco são utilizados como documentação para o modelo. Informe o tipo e o nome do banco utilizado via `laragrep.database` (`LARAGREP_DATABASE_TYPE` e `LARAGREP_DATABASE_NAME`) para que o prompt enviado à IA carregue esse contexto automaticamente.
+O LaraGrep lê automaticamente o catálogo do banco configurado para montar o contexto de tabelas e colunas. A conexão utilizada é a mesma definida pelo Laravel ou a informada em `laragrep.contexts.default.connection` (via `LARAGREP_CONNECTION`). O carregamento consulta as visões `information_schema.TABLES` e `information_schema.COLUMNS`, respeitando a lista de exclusões configurada em `laragrep.contexts.default.exclude_tables` (`LARAGREP_EXCLUDE_TABLES`). Comentários/descrições das tabelas e colunas no banco são utilizados como documentação para o modelo. Informe o tipo e o nome do banco utilizado via `laragrep.contexts.default.database` (`LARAGREP_DATABASE_TYPE` e `LARAGREP_DATABASE_NAME`) para que o prompt enviado à IA carregue esse contexto automaticamente.
 
-Além do carregamento automático, é possível complementar ou substituir informações pelo array `metadata` no arquivo `config/laragrep.php`. Cada item segue a estrutura abaixo:
+Além do carregamento automático, é possível complementar ou substituir informações pelo array `contexts.default.tables` no arquivo `config/laragrep.php`. Cada item segue a estrutura abaixo:
 
 ```php
 return [
     // ...outras opções
-    'metadata' => [
-        [
-            'name' => 'orders', // nome da tabela, view ou conjunto lógico
-            'description' => 'Pedidos realizados pelos clientes', // opcional
-            'model' => App\\Models\\Order::class, // opcional, usado para executar passos Eloquent
-            'columns' => [
+    'contexts' => [
+        'default' => [
+            // ...outras opções do contexto padrão
+            'tables' => [
                 [
-                    'name' => 'id',
-                    'type' => 'bigint unsigned', // opcional
-                    'description' => 'Chave primária', // opcional
+                    'name' => 'orders', // nome da tabela, view ou conjunto lógico
+                    'description' => 'Pedidos realizados pelos clientes', // opcional
+                    'model' => App\\Models\\Order::class, // opcional, usado para executar passos Eloquent
+                    'columns' => [
+                        [
+                            'name' => 'id',
+                            'type' => 'bigint unsigned', // opcional
+                            'description' => 'Chave primária', // opcional
+                        ],
+                        [
+                            'name' => 'user_id',
+                            'type' => 'bigint unsigned',
+                            'description' => 'Relaciona com users.id',
+                        ],
+                    ],
                 ],
-                [
-                    'name' => 'user_id',
-                    'type' => 'bigint unsigned',
-                    'description' => 'Relaciona com users.id',
-                ],
+                // ...outras tabelas documentadas manualmente
             ],
         ],
-        // ...outros objetos de metadados
     ],
 ];
 ```
@@ -66,7 +71,7 @@ return [
 - `model` é opcional; quando informado, o nome completo da classe é incluído no prompt e usado para resolver passos Eloquent que tragam apenas o apelido (ex.: `users`). Caso a classe não seja fornecida, a execução cai automaticamente para o construtor de consultas (`DB::table('users')`) utilizando o próprio `name` como tabela.
 - `columns` é um array opcional; cada coluna pode ter `name`, `type` e `description`.
 
-Além disso, utilize o bloco `database` da configuração para sinalizar explicitamente à IA o tipo do banco (ex.: "MariaDB 10.6") e o nome da base acessada. Esse contexto adicional é enviado ao modelo e reduz a chance de consultas inválidas.
+Além disso, utilize o bloco `contexts.default.database` da configuração para sinalizar explicitamente à IA o tipo do banco (ex.: "MariaDB 10.6") e o nome da base acessada. Esse contexto adicional é enviado ao modelo e reduz a chance de consultas inválidas.
 
 Quando o contexto é enviado ao modelo, cada entrada aparece resumida de forma semelhante a:
 
@@ -84,16 +89,16 @@ As entradas definidas manualmente são mescladas às que vêm do banco. Dessa fo
 
 ### Contextos nomeados
 
-Quando você trabalha com múltiplos bancos ou conjuntos de tabelas, defina contextos nomeados e selecione-os diretamente na URL. Utilize o bloco `contexts` para sobrescrever conexão, nome do banco ou tabela a ignorar enquanto mantém o array `metadata` global como documentação comum:
+Quando você trabalha com múltiplos bancos ou conjuntos de tabelas, defina contextos nomeados e selecione-os diretamente na URL. Utilize o bloco `contexts` para sobrescrever conexão, nome do banco, tabelas a ignorar ou mesmo a lista de `tables` utilizada no contexto padrão:
 
 ```php
 return [
-    'metadata' => [...],
     'contexts' => [
         'adf' => [
             'connection' => 'mysql_adf',
             'database' => ['type' => 'MariaDB 10.6', 'name' => 'adf_reporting'],
             'exclude_tables' => ['migrations'],
+            'tables' => [...],
         ],
     ],
 ];
@@ -104,7 +109,7 @@ Ao enviar um `POST` para `/laragrep/{contexto}`, o pacote aplica as overrides de
 ## Uso
 
 1. Certifique-se de que suas tabelas e colunas possuem descrições/comentários no banco. O pacote consulta o `information_schema` utilizando a conexão configurada.
-2. Ajuste `laragrep.exclude_tables` no arquivo de configuração para esconder tabelas sensíveis de clientes.
+2. Ajuste `laragrep.contexts.default.exclude_tables` no arquivo de configuração para esconder tabelas sensíveis de clientes.
 3. Envie uma requisição `POST` para a rota publicada (`/laragrep` por padrão) com o payload abaixo. Opcionalmente, inclua o contexto desejado na URL (ex.: `/laragrep/adf`) para aplicar as configurações específicas daquele banco.
 
 ```json
