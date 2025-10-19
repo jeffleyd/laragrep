@@ -74,7 +74,7 @@ class LaraGrepQueryService
         return implode(PHP_EOL . PHP_EOL, array_filter([
             $this->buildDatabaseContextLine(),
             'Use the available schema to produce one or more safe SQL SELECT queries that answer the user\'s question. If multiple steps are required, describe them in the order they should be executed.',
-            'Respond strictly in JSON with the format {"steps": [{"query": "...", "bindings": []}, ...]}. Only generate parameterized SELECT statements and never produce CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, or any other mutating commands.',
+            'Respond strictly in JSON with the format {"steps": [{"query": "...", "bindings": []}, ...]}. Only generate parameterized SELECT statements and never produce CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, or any other mutating commands. If the user requests any write operation or an unsafe action, respond instead with {"steps": [], "summary": "<polite refusal in the user language>"}.',
             'User language: ' . $this->getUserLanguage(),
             'Available schema:',
             $metadataSummary,
@@ -84,13 +84,24 @@ class LaraGrepQueryService
 
     public function answerQuestion(string $question, bool $debug = false): array
     {
-        if ($this->questionRequestsWriteOperations($question)) {
-            return $this->buildModificationNotAllowedResponse();
-        }
-
         $queryMessages = $this->buildQueryMessages($question);
         $queryResponse = $this->callModel($queryMessages);
-        $planSteps = $this->interpretQueryPlanResponse($queryResponse);
+        $plan = $this->interpretQueryPlanResponse($queryResponse);
+
+        if ($plan['steps'] === []) {
+            $summary = $plan['summary'] ?? 'Sorry, I can only help with read-only queries.';
+
+            $answer = ['summary' => $summary];
+
+            if ($debug) {
+                $answer['steps'] = [];
+                $answer['results'] = [];
+            }
+
+            return $answer;
+        }
+
+        $planSteps = $plan['steps'];
 
         $executedSteps = [];
         $debugQueries = [];
@@ -119,18 +130,20 @@ class LaraGrepQueryService
 
         $answer = [
             'summary' => $summary,
-            'steps' => $executedSteps,
         ];
 
-        if ($executedSteps !== []) {
-            $firstStep = $executedSteps[0];
-
-            $answer['query'] = $firstStep['query'];
-            $answer['bindings'] = $firstStep['bindings'];
-            $answer['results'] = $firstStep['results'];
-        }
-
         if ($debug) {
+            $answer['steps'] = $executedSteps;
+
+            if ($executedSteps !== []) {
+                $firstStep = $executedSteps[0];
+
+                $answer['bindings'] = $firstStep['bindings'];
+                $answer['results'] = $firstStep['results'];
+            } else {
+                $answer['results'] = [];
+            }
+
             $answer['debug'] = [
                 'queries' => $debugQueries,
             ];
@@ -229,9 +242,6 @@ class LaraGrepQueryService
         return $response->json();
     }
 
-    /**
-     * @return array<int, array{query: string, bindings: array<int, mixed>}>
-     */
     protected function interpretQueryPlanResponse(array $response): array
     {
         $content = Arr::get($response, 'choices.0.message.content');
@@ -248,7 +258,7 @@ class LaraGrepQueryService
 
         $steps = $decoded['steps'] ?? null;
 
-        if (!is_array($steps) || $steps === []) {
+        if (!is_array($steps)) {
             throw new RuntimeException('Language model response did not include query steps.');
         }
 
@@ -281,7 +291,18 @@ class LaraGrepQueryService
             ];
         }
 
-        return $normalized;
+        $summary = isset($decoded['summary']) && is_string($decoded['summary'])
+            ? trim($decoded['summary'])
+            : null;
+
+        if ($normalized === [] && $summary === null) {
+            throw new RuntimeException('Language model response did not include query steps.');
+        }
+
+        return [
+            'steps' => $normalized,
+            'summary' => $summary,
+        ];
     }
 
     protected function interpretFinalResponse(array $response): string
@@ -381,38 +402,4 @@ class LaraGrepQueryService
         return $language !== '' ? $language : 'en';
     }
 
-    protected function questionRequestsWriteOperations(string $question): bool
-    {
-        $normalized = Str::lower($question);
-
-        $patterns = [
-            '/\b(create|insert|update|delete|drop|alter|truncate|merge|replace|upsert)\b/iu',
-            '/\b(add|remove|destroy|edit|modify)\b/iu',
-            '/\b(cadastrar|cadastre|cadastro|criar|crie|criem|criou|inserir|insira|insere|inseri|insercao|inserção|adicionar|adicione|adiciona|atualizar|atualize|atualizacao|atualização|remover|remova|excluir|exclua|apagar|apague|deletar|delete|deletem)\b/iu',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $normalized) === 1) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    protected function buildModificationNotAllowedResponse(): array
-    {
-        $language = Str::lower($this->getUserLanguage());
-
-        if (Str::startsWith($language, 'pt')) {
-            $summary = 'Desculpe, não posso criar, atualizar ou deletar dados; só posso ajudar com consultas de leitura.';
-        } else {
-            $summary = 'Sorry, I can only help with read-only queries and cannot create, update, or delete data.';
-        }
-
-        return [
-            'summary' => $summary,
-            'steps' => [],
-        ];
-    }
 }

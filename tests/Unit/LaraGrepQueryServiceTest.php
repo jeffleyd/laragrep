@@ -72,14 +72,9 @@ class LaraGrepQueryServiceTest extends TestCase
         $service = $this->makeService();
         $response = $service->answerQuestion('Listar usuários ativos');
 
-        $this->assertCount(1, $response['steps']);
-        $this->assertSame('select name from users where status = ?', $response['steps'][0]['query']);
-        $this->assertSame(['active'], $response['steps'][0]['bindings']);
-        $this->assertSame('Alice', $response['steps'][0]['results'][0]['name']);
-        $this->assertSame('select name from users where status = ?', $response['query']);
-        $this->assertSame(['active'], $response['bindings']);
-        $this->assertSame('Alice', $response['results'][0]['name']);
         $this->assertSame('Encontramos 1 usuário ativo: Alice.', $response['summary']);
+        $this->assertArrayNotHasKey('steps', $response);
+        $this->assertArrayNotHasKey('results', $response);
     }
 
     public function test_it_includes_executed_queries_when_debug_is_enabled()
@@ -110,6 +105,11 @@ class LaraGrepQueryServiceTest extends TestCase
         $service = $this->makeService();
         $response = $service->answerQuestion('Listar usuários ativos', true);
 
+        $this->assertArrayHasKey('steps', $response);
+        $this->assertArrayNotHasKey('query', $response);
+        $this->assertSame('select name from users where status = ?', $response['steps'][0]['query']);
+        $this->assertSame(['active'], $response['steps'][0]['bindings']);
+        $this->assertSame('Alice', $response['steps'][0]['results'][0]['name']);
         $this->assertArrayHasKey('debug', $response);
         $this->assertNotEmpty($response['debug']['queries']);
         $this->assertSame('select name from users where status = ?', $response['debug']['queries'][0]['query']);
@@ -118,15 +118,24 @@ class LaraGrepQueryServiceTest extends TestCase
 
     public function test_it_refuses_modification_requests()
     {
-        Http::fake();
+        Http::fakeSequence()
+            ->push([
+                'choices' => [[
+                    'message' => [
+                        'content' => json_encode([
+                            'steps' => [],
+                            'summary' => 'Desculpe, não posso criar, atualizar ou deletar dados; só posso ajudar com consultas de leitura.',
+                        ]),
+                    ],
+                ]],
+            ]);
 
         $service = $this->makeService();
         $response = $service->answerQuestion('Por favor, atualize o status do usuário para ativo');
 
         $this->assertSame('Desculpe, não posso criar, atualizar ou deletar dados; só posso ajudar com consultas de leitura.', $response['summary']);
-        $this->assertSame([], $response['steps']);
-
-        Http::assertNothingSent();
+        $this->assertArrayNotHasKey('steps', $response);
+        Http::assertSentCount(1);
     }
 
     public function test_interpretation_messages_request_business_friendly_summary()
