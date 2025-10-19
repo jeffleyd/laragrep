@@ -24,7 +24,8 @@ class LaraGrepQueryService
 
     public function __construct(
         protected SchemaMetadataLoader $metadataLoader,
-        protected array $config = []
+        protected array $config = [],
+        protected ?ConversationStore $conversationStore = null
     ) {
         $this->baseConfig = $this->normalizeConfig($this->config);
         $this->config = $this->baseConfig;
@@ -93,15 +94,24 @@ class LaraGrepQueryService
         ]));
     }
 
-    public function answerQuestion(string $question, bool $debug = false, ?string $context = null): array
+    public function answerQuestion(string $question, bool $debug = false, ?string $context = null, ?string $conversationId = null): array
     {
-        return $this->withContext($context, function () use ($question, $debug) {
-            $queryMessages = $this->buildQueryMessages($question);
+        return $this->withContext($context, function () use ($question, $debug, $conversationId) {
+            $conversationId = $this->normalizeConversationId($conversationId);
+            $history = $conversationId !== null
+                ? $this->getConversationMessages($conversationId)
+                : [];
+
+            $queryMessages = $this->buildQueryMessages($question, $history);
             $queryResponse = $this->callModel($queryMessages);
             $plan = $this->interpretQueryPlanResponse($queryResponse);
 
             if ($plan['steps'] === []) {
                 $summary = $plan['summary'] ?? 'Sorry, I can only help with read-only queries.';
+
+                if ($conversationId !== null) {
+                    $this->storeConversationExchange($conversationId, $question, $summary);
+                }
 
                 $answer = ['summary' => $summary];
 
@@ -140,6 +150,10 @@ class LaraGrepQueryService
             $finalResponse = $this->callModel($interpretationMessages);
             $summary = $this->interpretFinalResponse($finalResponse);
 
+            if ($conversationId !== null) {
+                $this->storeConversationExchange($conversationId, $question, $summary);
+            }
+
             $answer = [
                 'summary' => $summary,
             ];
@@ -165,13 +179,39 @@ class LaraGrepQueryService
         });
     }
 
-    protected function buildQueryMessages(string $question): array
+    protected function buildQueryMessages(string $question, array $history = []): array
     {
         $messages = [];
         $systemPrompt = trim((string) ($this->config['system_prompt'] ?? ''));
 
         if ($systemPrompt !== '') {
             $messages[] = ['role' => 'system', 'content' => $systemPrompt];
+        }
+
+        foreach ($history as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = $message['role'] ?? null;
+            $content = $message['content'] ?? null;
+
+            if (!is_string($role) || !is_string($content)) {
+                continue;
+            }
+
+            $role = trim(strtolower($role));
+            $content = trim($content);
+
+            if ($content === '') {
+                continue;
+            }
+
+            if (!in_array($role, ['user', 'assistant'], true)) {
+                continue;
+            }
+
+            $messages[] = ['role' => $role, 'content' => $content];
         }
 
         $messages[] = ['role' => 'user', 'content' => $this->buildPrompt($question)];
@@ -214,6 +254,35 @@ class LaraGrepQueryService
         ];
 
         return $messages;
+    }
+
+    protected function normalizeConversationId(?string $conversationId): ?string
+    {
+        if ($conversationId === null) {
+            return null;
+        }
+
+        $conversationId = trim((string) $conversationId);
+
+        return $conversationId === '' ? null : $conversationId;
+    }
+
+    protected function getConversationMessages(string $conversationId): array
+    {
+        if ($this->conversationStore === null) {
+            return [];
+        }
+
+        return $this->conversationStore->getMessages($conversationId);
+    }
+
+    protected function storeConversationExchange(string $conversationId, string $question, string $summary): void
+    {
+        if ($this->conversationStore === null) {
+            return;
+        }
+
+        $this->conversationStore->appendExchange($conversationId, $question, $summary);
     }
 
     protected function getMetadata(): array

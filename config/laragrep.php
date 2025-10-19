@@ -7,6 +7,13 @@ return [
     'system_prompt' => env('LARAGREP_SYSTEM_PROMPT', 'You are a helpful assistant that translates natural language questions into safe Laravel Eloquent queries. Always respond with valid JSON describing the steps to execute.'),
     'interpretation_prompt' => env('LARAGREP_INTERPRETATION_PROMPT', "You are an assistant that turns SQL query results into clear, business-oriented answers using the user's language."),
     'user_language' => env('LARAGREP_USER_LANGUAGE', 'pt-BR'),
+    'conversation' => [
+        'enabled' => env('LARAGREP_CONVERSATION_ENABLED', true),
+        'connection' => env('LARAGREP_CONVERSATION_CONNECTION', 'sqlite'),
+        'table' => env('LARAGREP_CONVERSATION_TABLE', 'laragrep_conversations'),
+        'max_messages' => (int) env('LARAGREP_CONVERSATION_MAX_MESSAGES', 10),
+        'ttl_days' => (int) env('LARAGREP_CONVERSATION_TTL_DAYS', 10),
+    ],
     'contexts' => [
         'default' => [
             'connection' => env('LARAGREP_CONNECTION'),
