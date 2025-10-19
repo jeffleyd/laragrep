@@ -249,7 +249,7 @@ class LaraGrepQueryService
             'content' => implode(PHP_EOL . PHP_EOL, [
                 'Original question: ' . $question,
                 'Executed queries (JSON): ' . json_encode($stepsForModel, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                sprintf('Provide a concise, business-oriented summary in %s that only reports the requested result. Do not mention SQL, queries, bindings, code, or technical terms. Explain what the numbers mean only if the user explicitly asked for that. If the list is empty, politely state that no records were found.', $this->getUserLanguage()),
+                sprintf('Provide a concise, business-oriented summary in %s that only reports the requested result. Do not mention SQL, queries, bindings, code, or technical terms. Explain what the numbers mean only if the user explicitly asked for that. If the list is empty, politely state that no records were found. You can use some html tags, like: table,b,ui,o,i,td,tr', $this->getUserLanguage()),
             ]),
         ];
 
