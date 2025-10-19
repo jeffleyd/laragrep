@@ -4,6 +4,7 @@ namespace LaraGrep;
 
 use Illuminate\Support\ServiceProvider;
 use LaraGrep\Metadata\SchemaMetadataLoader;
+use LaraGrep\Services\ConversationStore;
 use LaraGrep\Services\LaraGrepQueryService;
 
 class LaraGrepServiceProvider extends ServiceProvider
@@ -55,9 +56,33 @@ class LaraGrepServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(LaraGrepQueryService::class, function ($app) {
+            $config = $app['config']->get('laragrep', []);
+
+            $conversationConfig = $config['conversation'] ?? [];
+            $conversationStore = null;
+
+            if (is_array($conversationConfig) && ($conversationConfig['enabled'] ?? true)) {
+                $connectionName = $conversationConfig['connection'] ?? null;
+                $table = (string) ($conversationConfig['table'] ?? 'laragrep_conversations');
+                $maxMessages = (int) ($conversationConfig['max_messages'] ?? 10);
+                $ttlDays = (int) ($conversationConfig['ttl_days'] ?? 10);
+
+                $connection = $connectionName
+                    ? $app['db']->connection($connectionName)
+                    : $app['db']->connection();
+
+                $conversationStore = new ConversationStore(
+                    $connection,
+                    $table,
+                    $maxMessages,
+                    $ttlDays
+                );
+            }
+
             return new LaraGrepQueryService(
                 $app->make(SchemaMetadataLoader::class),
-                $app['config']->get('laragrep', [])
+                $config,
+                $conversationStore
             );
         });
     }
