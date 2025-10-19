@@ -144,7 +144,19 @@ class LaraGrepServiceProvider extends ServiceProvider
             ? $databasePath
             : $app->databasePath($databasePath);
 
-        return is_file($resolvedPath);
+        $directory = dirname($resolvedPath);
+
+        if (!is_dir($directory)) {
+            if (!@mkdir($directory, 0777, true) && !is_dir($directory)) {
+                return false;
+            }
+        }
+
+        if (is_file($resolvedPath)) {
+            return true;
+        }
+
+        return @touch($resolvedPath);
     }
 
     private function isAbsolutePath(string $path): bool
