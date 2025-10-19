@@ -5,6 +5,7 @@ namespace LaraGrep\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Str;
 use LaraGrep\Services\LaraGrepQueryService;
 
 class QueryController extends Controller
@@ -39,7 +40,17 @@ class QueryController extends Controller
 
         $context = $context === null || $context === '' ? 'default' : $context;
 
+        $conversationEnabled = (bool) config('laragrep.conversation.enabled', true);
+
+        if ($conversationEnabled && $conversationId === null) {
+            $conversationId = (string) Str::uuid();
+        }
+
         $answer = $this->service->answerQuestion($validated['question'], $debug, $context, $conversationId);
+
+        if ($conversationId !== null) {
+            $answer['context'] = $conversationId;
+        }
 
         return response()->json($answer);
     }
