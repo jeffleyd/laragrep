@@ -428,39 +428,40 @@ class LaraGrepQueryService
      */
     protected function runSelectQuery(string $query, array $bindings, bool $debug = false): array
     {
-        $connection = $this->getConnection();
-        $queries = [];
+        return $this->usingConfiguredConnection(function (ConnectionInterface $connection) use ($query, $bindings, $debug) {
+            $queries = [];
 
-        if ($debug) {
-            $connection->flushQueryLog();
-            $connection->enableQueryLog();
-        }
-
-        try {
-            $results = collect($connection->select($query, $bindings))
-                ->map(fn ($row) => (array) $row)
-                ->all();
-        } finally {
             if ($debug) {
-                $queries = collect($connection->getQueryLog())
-                    ->map(function (array $entry) {
-                        return [
-                            'query' => $entry['query'] ?? '',
-                            'bindings' => $entry['bindings'] ?? [],
-                            'time' => $entry['time'] ?? null,
-                        ];
-                    })
-                    ->all();
-
-                $connection->disableQueryLog();
                 $connection->flushQueryLog();
+                $connection->enableQueryLog();
             }
-        }
 
-        return [
-            'results' => $results,
-            'queries' => $queries,
-        ];
+            try {
+                $results = collect($connection->select($query, $bindings))
+                    ->map(fn ($row) => (array) $row)
+                    ->all();
+            } finally {
+                if ($debug) {
+                    $queries = collect($connection->getQueryLog())
+                        ->map(function (array $entry) {
+                            return [
+                                'query' => $entry['query'] ?? '',
+                                'bindings' => $entry['bindings'] ?? [],
+                                'time' => $entry['time'] ?? null,
+                            ];
+                        })
+                        ->all();
+
+                    $connection->disableQueryLog();
+                    $connection->flushQueryLog();
+                }
+            }
+
+            return [
+                'results' => $results,
+                'queries' => $queries,
+            ];
+        });
     }
 
     protected function assertTablesExistInMetadata(string $query): void
@@ -520,11 +521,37 @@ class LaraGrepQueryService
         return $tables;
     }
 
-    protected function getConnection(): ConnectionInterface
+    /**
+     * @template TReturn
+     * @param callable(ConnectionInterface):TReturn $callback
+     * @return TReturn
+     */
+    protected function usingConfiguredConnection(callable $callback)
     {
-        $connection = $this->config['connection'] ?? null;
+        $connectionName = $this->config['connection'] ?? null;
+        $previous = null;
+        $shouldRestore = false;
 
-        return $connection ? DB::connection($connection) : DB::connection();
+        if (is_string($connectionName) && $connectionName !== '') {
+            $previous = DB::getDefaultConnection();
+            $shouldRestore = $previous !== $connectionName;
+
+            if ($shouldRestore) {
+                DB::setDefaultConnection($connectionName);
+            }
+
+            $connection = DB::connection($connectionName);
+        } else {
+            $connection = DB::connection();
+        }
+
+        try {
+            return $callback($connection);
+        } finally {
+            if ($shouldRestore && $previous !== null) {
+                DB::setDefaultConnection($previous);
+            }
+        }
     }
 
     protected function buildDatabaseContextLine(): ?string

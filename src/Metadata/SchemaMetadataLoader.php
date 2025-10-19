@@ -22,7 +22,29 @@ class SchemaMetadataLoader
         $connectionName = $connection ?? $this->connection;
         $excludeTables = $excludeTables ?? $this->excludeTables;
 
-        $connection = $this->resolver->connection($connectionName);
+        $previous = null;
+        $shouldRestore = false;
+
+        if (is_string($connectionName) && $connectionName !== '') {
+            if (method_exists($this->resolver, 'getDefaultConnection')) {
+                /** @var string|null $previous */
+                $previous = $this->resolver->getDefaultConnection();
+                $shouldRestore = $previous !== $connectionName;
+            }
+
+            if ($shouldRestore) {
+                $this->resolver->setDefaultConnection($connectionName);
+            }
+        }
+
+        try {
+            $connection = $this->resolver->connection($connectionName);
+        } finally {
+            if ($shouldRestore && $previous !== null) {
+                $this->resolver->setDefaultConnection($previous);
+            }
+        }
+
         $database = $connection->getDatabaseName();
 
         if (!$database) {
