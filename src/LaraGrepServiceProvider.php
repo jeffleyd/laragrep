@@ -67,16 +67,20 @@ class LaraGrepServiceProvider extends ServiceProvider
                 $maxMessages = (int) ($conversationConfig['max_messages'] ?? 10);
                 $ttlDays = (int) ($conversationConfig['ttl_days'] ?? 10);
 
-                $connection = $connectionName
-                    ? $app['db']->connection($connectionName)
-                    : $app['db']->connection();
+                $connectionConfig = $this->getConnectionConfig($app, $connectionName);
 
-                $conversationStore = new ConversationStore(
-                    $connection,
-                    $table,
-                    $maxMessages,
-                    $ttlDays
-                );
+                if ($connectionConfig !== null && $this->connectionSupportsConversations($app, $connectionConfig)) {
+                    $connection = $connectionName
+                        ? $app['db']->connection($connectionName)
+                        : $app['db']->connection();
+
+                    $conversationStore = new ConversationStore(
+                        $connection,
+                        $table,
+                        $maxMessages,
+                        $ttlDays
+                    );
+                }
             }
 
             return new LaraGrepQueryService(
@@ -94,5 +98,65 @@ class LaraGrepServiceProvider extends ServiceProvider
         ], 'laragrep-config');
 
         $this->loadRoutesFrom(__DIR__ . '/../routes/api.php');
+    }
+
+
+    private function getConnectionConfig($app, ?string $connectionName): ?array
+    {
+        $configRepository = $app['config'];
+
+        if (is_string($connectionName) && $connectionName !== '') {
+            $config = $configRepository->get("database.connections.$connectionName");
+
+            return is_array($config) ? $config : null;
+        }
+
+        $defaultConnection = $configRepository->get('database.default');
+
+        if (!is_string($defaultConnection) || $defaultConnection === '') {
+            return null;
+        }
+
+        $config = $configRepository->get("database.connections.$defaultConnection");
+
+        return is_array($config) ? $config : null;
+    }
+
+    private function connectionSupportsConversations($app, array $connectionConfig): bool
+    {
+        $driver = $connectionConfig['driver'] ?? null;
+
+        if ($driver !== 'sqlite') {
+            return true;
+        }
+
+        $databasePath = (string) ($connectionConfig['database'] ?? '');
+
+        if ($databasePath === '') {
+            return false;
+        }
+
+        if ($databasePath === ':memory:') {
+            return true;
+        }
+
+        $resolvedPath = $this->isAbsolutePath($databasePath)
+            ? $databasePath
+            : $app->databasePath($databasePath);
+
+        return is_file($resolvedPath);
+    }
+
+    private function isAbsolutePath(string $path): bool
+    {
+        if ($path === '') {
+            return false;
+        }
+
+        if ($path[0] === DIRECTORY_SEPARATOR) {
+            return true;
+        }
+
+        return preg_match('#^[A-Za-z]:\\\\#', $path) === 1;
     }
 }
