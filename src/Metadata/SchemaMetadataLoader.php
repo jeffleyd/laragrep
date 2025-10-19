@@ -17,9 +17,12 @@ class SchemaMetadataLoader
     ) {
     }
 
-    public function load(): array
+    public function load(?string $connection = null, ?array $excludeTables = null): array
     {
-        $connection = $this->resolver->connection($this->connection);
+        $connectionName = $connection ?? $this->connection;
+        $excludeTables = $excludeTables ?? $this->excludeTables;
+
+        $connection = $this->resolver->connection($connectionName);
         $database = $connection->getDatabaseName();
 
         if (!$database) {
@@ -31,7 +34,7 @@ class SchemaMetadataLoader
             [$database]
         ));
 
-        $excluded = collect($this->excludeTables)
+        $excluded = collect($excludeTables)
             ->filter()
             ->map(fn ($name) => strtolower((string) $name))
             ->unique()

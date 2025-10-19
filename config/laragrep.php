@@ -99,6 +99,16 @@ return [
             ],
         ],
     ],
+    'contexts' => [
+        // 'adf' => [
+        //     'connection' => 'mysql_adf',
+        //     'database' => [
+        //         'type' => 'MariaDB 10.6',
+        //         'name' => 'adf_reporting',
+        //     ],
+        //     'exclude_tables' => ['migrations'],
+        // ],
+    ],
     'debug' => (bool) env('LARAGREP_DEBUG', false),
     'route' => [
         'prefix' => 'laragrep',
