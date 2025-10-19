@@ -24,6 +24,8 @@ class QueryController extends Controller
             ? (bool) $validated['debug']
             : (bool) config('laragrep.debug', false);
 
+        $context = $context === null || $context === '' ? 'default' : $context;
+
         $answer = $this->service->answerQuestion($validated['question'], $debug, $context);
 
         return response()->json($answer);
