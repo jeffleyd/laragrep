@@ -407,16 +407,56 @@ class LaraGrepQueryService
 
         $content = $this->extractAnthropicContent($data);
 
-        return [
-            'choices' => [
-                [
-                    'message' => [
-                        'content' => $content,
-                    ],
-                ],
+        $choice = [
+            'message' => [
+                'role' => 'assistant',
+                'content' => $content,
             ],
+        ];
+
+        if (isset($data['stop_reason']) && is_string($data['stop_reason'])) {
+            $choice['finish_reason'] = $data['stop_reason'];
+        }
+
+        $response = [
+            'choices' => [$choice],
             'raw_response' => $data,
         ];
+
+        if (isset($data['id']) && is_string($data['id'])) {
+            $response['id'] = $data['id'];
+        }
+
+        if (isset($data['model']) && is_string($data['model'])) {
+            $response['model'] = $data['model'];
+        }
+
+        $usage = $data['usage'] ?? null;
+
+        if (is_array($usage)) {
+            $promptTokens = isset($usage['input_tokens']) ? (int) $usage['input_tokens'] : null;
+            $completionTokens = isset($usage['output_tokens']) ? (int) $usage['output_tokens'] : null;
+
+            $normalizedUsage = [];
+
+            if ($promptTokens !== null) {
+                $normalizedUsage['prompt_tokens'] = $promptTokens;
+            }
+
+            if ($completionTokens !== null) {
+                $normalizedUsage['completion_tokens'] = $completionTokens;
+            }
+
+            if ($promptTokens !== null && $completionTokens !== null) {
+                $normalizedUsage['total_tokens'] = $promptTokens + $completionTokens;
+            }
+
+            if ($normalizedUsage !== []) {
+                $response['usage'] = $normalizedUsage;
+            }
+        }
+
+        return $response;
     }
 
     /**
