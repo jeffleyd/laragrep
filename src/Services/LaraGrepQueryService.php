@@ -18,7 +18,7 @@ class LaraGrepQueryService
     /**
      * @var array<string, array<int, array<string, mixed>>>
      */
-    protected array $cachedMetadata = [];
+    protected array $cachedTables = [];
 
     protected ?string $currentContext = null;
 
@@ -32,6 +32,17 @@ class LaraGrepQueryService
     }
 
     public function buildPrompt(string $question): string
+    {
+        return implode(PHP_EOL . PHP_EOL, array_filter([
+            'Use the available schema to produce one or more safe SQL SELECT queries that answer the user\'s question. If multiple steps are required, describe them in the order they should be executed.',
+            'Respond strictly in JSON with the format {"steps": [{"query": "...", "bindings": []}, ...]}. Only generate parameterized SELECT statements and never produce CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, or any other mutating commands. If the user requests any write operation or an unsafe action, respond instead with {"steps": [], "summary": "<polite refusal in the user language>"}.',
+            'If the question can be answered without running a database query (for example, it only references prior conversation, is outside the scope of the schema, or requests unsupported data), respond with {"steps": [], "summary": "<clear explanation in the user language>"}.',
+            'Only reference tables that are explicitly listed in the schema summary. If the necessary table is missing, do not guess—return {"steps": [], "summary": "<explain the limitation in the user language>"}.',
+            'Question: ' . $question,
+        ]));
+    }
+
+    protected function buildSystemPrompt(): string
     {
         $metadata = $this->getMetadata();
         $metadataSummary = collect($metadata)
@@ -81,17 +92,20 @@ class LaraGrepQueryService
             })
             ->implode(PHP_EOL . PHP_EOL);
 
-        return implode(PHP_EOL . PHP_EOL, array_filter([
+        $parts = array_filter([
             $this->buildDatabaseContextLine(),
-            'Use the available schema to produce one or more safe SQL SELECT queries that answer the user\'s question. If multiple steps are required, describe them in the order they should be executed.',
-            'Respond strictly in JSON with the format {"steps": [{"query": "...", "bindings": []}, ...]}. Only generate parameterized SELECT statements and never produce CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, or any other mutating commands. If the user requests any write operation or an unsafe action, respond instead with {"steps": [], "summary": "<polite refusal in the user language>"}.',
-            'If the question can be answered without running a database query (for example, it only references prior conversation, is outside the scope of the schema, or requests unsupported data), respond with {"steps": [], "summary": "<clear explanation in the user language>"}.',
-            'Only reference tables that are explicitly listed in the schema summary. If the necessary table is missing, do not guess—return {"steps": [], "summary": "<explain the limitation in the user language>"}.',
             'User language: ' . $this->getUserLanguage(),
             'Available schema:',
             $metadataSummary,
-            'Question: ' . $question,
-        ]));
+        ]);
+
+        $customSystemPrompt = trim((string) ($this->config['system_prompt'] ?? ''));
+
+        if ($customSystemPrompt !== '') {
+            array_unshift($parts, $customSystemPrompt);
+        }
+
+        return implode(PHP_EOL . PHP_EOL, $parts);
     }
 
     public function answerQuestion(string $question, bool $debug = false, ?string $context = null, ?string $conversationId = null): array
@@ -182,11 +196,10 @@ class LaraGrepQueryService
     protected function buildQueryMessages(string $question, array $history = []): array
     {
         $messages = [];
-        $systemPrompt = trim((string) ($this->config['system_prompt'] ?? ''));
 
-        if ($systemPrompt !== '') {
-            $messages[] = ['role' => 'system', 'content' => $systemPrompt];
-        }
+        // System prompt com metadata e cache
+        $systemPrompt = $this->buildSystemPrompt();
+        $messages[] = ['role' => 'system', 'content' => $systemPrompt];
 
         foreach ($history as $message) {
             if (!is_array($message)) {
@@ -249,7 +262,7 @@ class LaraGrepQueryService
             'content' => implode(PHP_EOL . PHP_EOL, [
                 'Original question: ' . $question,
                 'Executed queries (JSON): ' . json_encode($stepsForModel, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                sprintf('Provide a concise, business-oriented summary in %s that only reports the requested result. Do not mention SQL, queries, bindings, code, or technical terms. Explain what the numbers mean only if the user explicitly asked for that. If the list is empty, politely state that no records were found. You can just use pure html tags, like: table,b,ui,o,i,td,tr. do not use markdown!', $this->getUserLanguage()),
+                sprintf('Provide a concise, business-oriented summary in %s that only reports the requested result. Do not mention SQL, queries, bindings, code, or technical terms. Explain what the numbers mean only if the user explicitly asked for that. If the list is empty, politely state that no records were found. You can only use those html tags: table,b,ui,o,i,td,tr. do not use markdown!', $this->getUserLanguage()),
             ]),
         ];
 
@@ -287,37 +300,24 @@ class LaraGrepQueryService
 
     protected function getMetadata(): array
     {
-        $cacheKey = $this->currentContext ?? '__default__';
+        $cacheKey = $this->currentContext ?? 'default';
 
-        if (array_key_exists($cacheKey, $this->cachedMetadata)) {
-            return $this->cachedMetadata[$cacheKey];
+        if (array_key_exists($cacheKey, $this->cachedTables)) {
+            return $this->cachedTables[$cacheKey];
         }
 
-        $configured = $this->config['metadata'] ?? [];
+        $tables = $this->config['tables'] ?? [];
 
-        if (!is_array($configured)) {
-            $configured = [];
+        if (!is_array($tables)) {
+            $tables = [];
         }
 
-        $configured = array_values(array_filter(
-            $configured,
+        $tables = array_values(array_filter(
+            $tables,
             fn ($table) => is_array($table)
         ));
 
-        $excludeTables = $this->config['exclude_tables'] ?? [];
-
-        if (!is_array($excludeTables)) {
-            $excludeTables = [];
-        }
-
-        $loaded = $this->metadataLoader->load(
-            $this->config['connection'] ?? null,
-            $excludeTables
-        );
-
-        $metadata = array_values(array_merge($loaded, $configured));
-
-        return $this->cachedMetadata[$cacheKey] = $metadata;
+        return $tables;
     }
 
     protected function callModel(array $messages): array
@@ -364,7 +364,7 @@ class LaraGrepQueryService
 
     protected function callAnthropicModel(array $messages, string $apiKey): array
     {
-        [$systemPrompt, $preparedMessages] = $this->prepareAnthropicMessages($messages);
+        [$systemContent, $preparedMessages] = $this->prepareAnthropicMessages($messages);
 
         if ($preparedMessages === []) {
             throw new RuntimeException('No valid messages provided to the language model.');
@@ -386,8 +386,8 @@ class LaraGrepQueryService
             'messages' => $preparedMessages,
         ];
 
-        if ($systemPrompt !== null) {
-            $payload['system'] = $systemPrompt;
+        if ($systemContent !== null) {
+            $payload['system'] = $systemContent;
         }
 
         $response = Http::withHeaders([
@@ -460,11 +460,11 @@ class LaraGrepQueryService
     }
 
     /**
-     * @return array{0: ?string, 1: array<int, array{role: string, content: array<int, array{type: string, text: string}>}>}
+     * @return array{0: array|null, 1: array<int, array{role: string, content: array<int, array{type: string, text: string}>}>}
      */
     protected function prepareAnthropicMessages(array $messages): array
     {
-        $systemPrompts = [];
+        $systemBlocks = [];
         $prepared = [];
 
         foreach ($messages as $message) {
@@ -480,7 +480,12 @@ class LaraGrepQueryService
             }
 
             if ($role === 'system') {
-                $systemPrompts[] = $text;
+                // System com cache_control
+                $systemBlocks[] = [
+                    'type' => 'text',
+                    'text' => $text,
+                    'cache_control' => ['type' => 'ephemeral']
+                ];
                 continue;
             }
 
@@ -499,9 +504,9 @@ class LaraGrepQueryService
             ];
         }
 
-        $systemPrompt = $systemPrompts !== [] ? implode("\n\n", $systemPrompts) : null;
+        $systemContent = $systemBlocks !== [] ? $systemBlocks : null;
 
-        return [$systemPrompt, $prepared];
+        return [$systemContent, $prepared];
     }
 
     protected function convertMessageContentToString($content): string
@@ -638,7 +643,6 @@ class LaraGrepQueryService
 
     /**
      * @param array<int, mixed> $bindings
-     * @param array<int, array<string, mixed>> $results
      * @return array{results: array<int, array<string, mixed>>, queries: array<int, array<string, mixed>>}
      */
     protected function runSelectQuery(string $query, array $bindings, bool $debug = false): array
@@ -816,24 +820,16 @@ class LaraGrepQueryService
         $previousConfig = $this->config;
         $previousContext = $this->currentContext;
 
-        if ($context === null) {
-            $this->currentContext = null;
-            $this->config = $this->baseConfig;
+        $contextName = $context ?? 'default';
+        $this->currentContext = $contextName;
+
+        $contexts = $this->baseConfig['contexts'] ?? [];
+
+        if (is_array($contexts) && isset($contexts[$contextName]) && is_array($contexts[$contextName])) {
+            $contextConfig = $contexts[$contextName];
+            $this->config = array_replace_recursive($this->baseConfig, $contextConfig);
         } else {
-            $this->currentContext = $context;
-            $overrides = [];
-
-            $contexts = $this->baseConfig['contexts'] ?? [];
-
-            if (is_array($contexts)) {
-                $contextOverrides = $contexts[$context] ?? [];
-
-                if (is_array($contextOverrides)) {
-                    $overrides = $contextOverrides;
-                }
-            }
-
-            $this->config = array_replace_recursive($this->baseConfig, $overrides);
+            $this->config = $this->baseConfig;
         }
 
         try {
@@ -848,88 +844,13 @@ class LaraGrepQueryService
     {
         $normalized = $config;
 
-        $normalized['metadata'] = $this->normalizeTables($normalized['metadata'] ?? []);
-        $normalized['exclude_tables'] = $this->normalizeExcludeTables($normalized['exclude_tables'] ?? []);
-        $normalized['database'] = $this->normalizeDatabase($normalized['database'] ?? []);
-
-        $legacyContext = $this->normalizeContextArray($normalized['context'] ?? []);
-        unset($normalized['context']);
-
         $normalized['contexts'] = $this->normalizeContextsArray($normalized['contexts'] ?? []);
 
-        if ($legacyContext !== []) {
-            $normalized['contexts']['default'] = array_replace_recursive(
-                $normalized['contexts']['default'] ?? [],
-                $legacyContext
-            );
-        }
-
-        $defaultContext = $normalized['contexts']['default'] ?? [];
-
-        if ($defaultContext === [] && (
-            ($normalized['metadata'] ?? []) !== [] ||
-            ($normalized['exclude_tables'] ?? []) !== [] ||
-            ($normalized['database'] ?? []) !== [] ||
-            ($normalized['connection'] ?? null) !== null
-        )) {
-            $defaultContext = $this->normalizeContextArray([
-                'metadata' => $normalized['metadata'],
-                'exclude_tables' => $normalized['exclude_tables'],
-                'database' => $normalized['database'],
-                'connection' => $normalized['connection'] ?? null,
-            ]);
-
-            if ($defaultContext !== []) {
-                $normalized['contexts']['default'] = $defaultContext;
-            }
-        }
-
-        if ($defaultContext !== []) {
-            foreach (['connection', 'exclude_tables', 'database', 'metadata'] as $key) {
-                if (array_key_exists($key, $defaultContext)) {
-                    $normalized[$key] = $defaultContext[$key];
-                }
-            }
-        }
-
         return $normalized;
     }
 
-    protected function normalizeContextArray($context): array
+    protected function normalizeContextsArray(array $contexts): array
     {
-        if (!is_array($context)) {
-            return [];
-        }
-
-        $normalized = $context;
-
-        if (array_key_exists('tables', $normalized)) {
-            $tables = $this->normalizeTables($normalized['tables']);
-            $normalized['tables'] = $tables;
-            $normalized['metadata'] = $tables;
-        }
-
-        if (array_key_exists('metadata', $normalized)) {
-            $normalized['metadata'] = $this->normalizeTables($normalized['metadata']);
-        }
-
-        if (array_key_exists('exclude_tables', $normalized)) {
-            $normalized['exclude_tables'] = $this->normalizeExcludeTables($normalized['exclude_tables']);
-        }
-
-        if (array_key_exists('database', $normalized)) {
-            $normalized['database'] = $this->normalizeDatabase($normalized['database']);
-        }
-
-        return $normalized;
-    }
-
-    protected function normalizeContextsArray($contexts): array
-    {
-        if (!is_array($contexts)) {
-            return [];
-        }
-
         $normalized = [];
 
         foreach ($contexts as $name => $context) {
@@ -938,6 +859,25 @@ class LaraGrepQueryService
             }
 
             $normalized[$name] = $this->normalizeContextArray($context);
+        }
+
+        return $normalized;
+    }
+
+    protected function normalizeContextArray(array $context): array
+    {
+        $normalized = [];
+
+        if (array_key_exists('connection', $context)) {
+            $normalized['connection'] = $context['connection'];
+        }
+
+        if (array_key_exists('tables', $context)) {
+            $normalized['tables'] = $this->normalizeTables($context['tables']);
+        }
+
+        if (array_key_exists('database', $context)) {
+            $normalized['database'] = $this->normalizeDatabase($context['database']);
         }
 
         return $normalized;
