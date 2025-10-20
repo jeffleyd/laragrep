@@ -1,6 +1,6 @@
 # LaraGrep
 
-Pacote Laravel para transformar perguntas em linguagem natural em consultas Eloquent parametrizadas com auxílio de um modelo da OpenAI. O pacote expõe uma rota de API, carrega metadados das tabelas e traduz a resposta do modelo em comandos executáveis com fallback seguro para consultas SQL brutas somente-leitura.
+Pacote Laravel para transformar perguntas em linguagem natural em consultas Eloquent parametrizadas com auxílio de um modelo da OpenAI ou da Anthropic. O pacote expõe uma rota de API, carrega metadados das tabelas e traduz a resposta do modelo em comandos executáveis com fallback seguro para consultas SQL brutas somente-leitura.
 
 ## Instalação
 
@@ -16,18 +16,22 @@ Publique o arquivo de configuração para customizar credenciais, middleware, pr
 php artisan vendor:publish --tag=laragrep-config
 ```
 
-Defina sua chave de API da OpenAI (ou sobrescreva via variáveis específicas da LaraGrep) e demais variáveis no `.env`:
+Defina sua chave de API (OpenAI ou Anthropic) — é possível usar `LARAGREP_API_KEY`, `OPENAI_API_KEY` ou `ANTHROPIC_API_KEY` — e demais variáveis no `.env`:
 
 ```env
+LARAGREP_PROVIDER=openai # ou anthropic
 LARAGREP_API_KEY=sk-...
-LARAGREP_BASE_URL=https://api.openai.com/v1/chat/completions
 LARAGREP_MODEL=gpt-3.5-turbo
+LARAGREP_MAX_TOKENS=1024
+LARAGREP_ANTHROPIC_VERSION=2023-06-01
 LARAGREP_DATABASE_TYPE=MariaDB 10.6
 LARAGREP_DATABASE_NAME=retos_live
 LARAGREP_EXCLUDE_TABLES=migrations,password_resets
 LARAGREP_CONNECTION=mysql
 LARAGREP_DEBUG=false
 ```
+
+A URL base de cada provedor é detectada automaticamente, mas você pode sobrescrever via `LARAGREP_BASE_URL` quando necessário (por exemplo, para apontar para um proxy).
 
 ## Metadados do esquema
 

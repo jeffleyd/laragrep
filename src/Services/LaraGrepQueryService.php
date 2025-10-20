@@ -325,24 +325,194 @@ class LaraGrepQueryService
         $apiKey = $this->config['api_key'] ?? null;
 
         if (!$apiKey) {
-            throw new RuntimeException('Missing OpenAI API key.');
+            throw new RuntimeException('Missing API key for the language model.');
         }
 
         if ($messages === []) {
             throw new RuntimeException('No messages provided to the language model.');
         }
 
-        $response = Http::withToken($apiKey)
-            ->post($this->config['base_url'] ?? 'https://api.openai.com/v1/chat/completions', [
-                'model' => $this->config['model'] ?? 'gpt-3.5-turbo',
-                'messages' => $messages,
-            ]);
+        $provider = strtolower((string) ($this->config['provider'] ?? 'openai'));
+
+        return match ($provider) {
+            'anthropic' => $this->callAnthropicModel($messages, $apiKey),
+            default => $this->callOpenAiModel($messages, $apiKey),
+        };
+    }
+
+    protected function callOpenAiModel(array $messages, string $apiKey): array
+    {
+        $baseUrl = $this->config['base_url'] ?? null;
+
+        if (!is_string($baseUrl) || $baseUrl === '') {
+            $baseUrl = 'https://api.openai.com/v1/chat/completions';
+        }
+
+        $model = $this->config['model'] ?? 'gpt-3.5-turbo';
+
+        $response = Http::withToken($apiKey)->post($baseUrl, [
+            'model' => $model,
+            'messages' => $messages,
+        ]);
 
         if ($response->failed()) {
             throw new RuntimeException('Failed to call language model: ' . $response->body());
         }
 
         return $response->json();
+    }
+
+    protected function callAnthropicModel(array $messages, string $apiKey): array
+    {
+        [$systemPrompt, $preparedMessages] = $this->prepareAnthropicMessages($messages);
+
+        if ($preparedMessages === []) {
+            throw new RuntimeException('No valid messages provided to the language model.');
+        }
+
+        $baseUrl = $this->config['base_url'] ?? null;
+
+        if (!is_string($baseUrl) || $baseUrl === '') {
+            $baseUrl = 'https://api.anthropic.com/v1/messages';
+        }
+
+        $model = $this->config['model'] ?? 'claude-3-sonnet-20240229';
+        $maxTokens = (int) ($this->config['max_tokens'] ?? 1024);
+        $anthropicVersion = $this->config['anthropic_version'] ?? '2023-06-01';
+
+        $payload = [
+            'model' => $model,
+            'max_tokens' => $maxTokens,
+            'messages' => $preparedMessages,
+        ];
+
+        if ($systemPrompt !== null) {
+            $payload['system'] = $systemPrompt;
+        }
+
+        $response = Http::withHeaders([
+            'x-api-key' => $apiKey,
+            'anthropic-version' => $anthropicVersion,
+        ])->post($baseUrl, $payload);
+
+        if ($response->failed()) {
+            throw new RuntimeException('Failed to call language model: ' . $response->body());
+        }
+
+        $data = $response->json();
+
+        if (!is_array($data)) {
+            throw new RuntimeException('Failed to decode language model response.');
+        }
+
+        $content = $this->extractAnthropicContent($data);
+
+        return [
+            'choices' => [
+                [
+                    'message' => [
+                        'content' => $content,
+                    ],
+                ],
+            ],
+            'raw_response' => $data,
+        ];
+    }
+
+    /**
+     * @return array{0: ?string, 1: array<int, array{role: string, content: array<int, array{type: string, text: string}>}>}
+     */
+    protected function prepareAnthropicMessages(array $messages): array
+    {
+        $systemPrompts = [];
+        $prepared = [];
+
+        foreach ($messages as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = isset($message['role']) ? strtolower((string) $message['role']) : '';
+            $text = $this->convertMessageContentToString($message['content'] ?? '');
+
+            if ($text === '') {
+                continue;
+            }
+
+            if ($role === 'system') {
+                $systemPrompts[] = $text;
+                continue;
+            }
+
+            if (!in_array($role, ['user', 'assistant'], true)) {
+                continue;
+            }
+
+            $prepared[] = [
+                'role' => $role,
+                'content' => [
+                    [
+                        'type' => 'text',
+                        'text' => $text,
+                    ],
+                ],
+            ];
+        }
+
+        $systemPrompt = $systemPrompts !== [] ? implode("\n\n", $systemPrompts) : null;
+
+        return [$systemPrompt, $prepared];
+    }
+
+    protected function convertMessageContentToString($content): string
+    {
+        if (is_string($content)) {
+            return trim($content);
+        }
+
+        if (is_array($content)) {
+            $segments = [];
+
+            foreach ($content as $segment) {
+                if (is_string($segment)) {
+                    $segments[] = $segment;
+                } elseif (is_array($segment) && isset($segment['text']) && is_string($segment['text'])) {
+                    $segments[] = $segment['text'];
+                }
+            }
+
+            return trim(implode("\n", $segments));
+        }
+
+        return '';
+    }
+
+    protected function extractAnthropicContent(array $response): string
+    {
+        $content = $response['content'] ?? null;
+        $segments = [];
+
+        if (is_array($content)) {
+            foreach ($content as $block) {
+                if (!is_array($block)) {
+                    continue;
+                }
+
+                if (($block['type'] ?? null) === 'text' && isset($block['text']) && is_string($block['text'])) {
+                    $segments[] = $block['text'];
+                }
+            }
+        }
+
+        if ($segments === [] && isset($response['completion']) && is_string($response['completion'])) {
+            $segments[] = $response['completion'];
+        }
+
+        if ($segments === []) {
+            throw new RuntimeException('Language model did not return a message.');
+        }
+
+        return trim(implode("\n", $segments));
     }
 
     protected function interpretQueryPlanResponse(array $response): array

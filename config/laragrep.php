@@ -1,9 +1,12 @@
 <?php
 
 return [
-    'api_key' => env('LARAGREP_API_KEY', env('OPENAI_API_KEY')),
-    'base_url' => env('LARAGREP_BASE_URL', 'https://api.openai.com/v1/chat/completions'),
+    'provider' => env('LARAGREP_PROVIDER', 'openai'),
+    'api_key' => env('LARAGREP_API_KEY', env('OPENAI_API_KEY', env('ANTHROPIC_API_KEY'))),
+    'base_url' => env('LARAGREP_BASE_URL'),
     'model' => env('LARAGREP_MODEL', 'gpt-3.5-turbo'),
+    'max_tokens' => (int) env('LARAGREP_MAX_TOKENS', 1024),
+    'anthropic_version' => env('LARAGREP_ANTHROPIC_VERSION', '2023-06-01'),
     'system_prompt' => env('LARAGREP_SYSTEM_PROMPT', 'You are a helpful assistant that translates natural language questions into safe Laravel Eloquent queries. Always respond with valid JSON describing the steps to execute.'),
     'interpretation_prompt' => env('LARAGREP_INTERPRETATION_PROMPT', "You are an assistant that turns SQL query results into clear, business-oriented answers using the user's language."),
     'user_language' => env('LARAGREP_USER_LANGUAGE', 'pt-BR'),
